@@ -10,24 +10,26 @@ calendar_generated = gnome.gdbus_codegen('cinnamon-calendar',
 )
 
 cinnamon_headers = [
+    'cinnamon-action-mode.h',
     'cinnamon-app.h',
     'cinnamon-app-system.h',
     'cinnamon-doc-system.h',
     'cinnamon-embedded-window.h',
     'cinnamon-generic-container.h',
-    'cinnamon-glsl-quad.h',
+    'cinnamon-glsl-effect.h',
     'cinnamon-gtk-embed.h',
     'cinnamon-global.h',
     'cinnamon-perf-log.h',
+    'cinnamon-screen.h',
     'cinnamon-screenshot.h',
     'cinnamon-slicer.h',
     'cinnamon-stack.h',
+    'cinnamon-touchegg-client.h',
     'cinnamon-tray-icon.h',
     'cinnamon-tray-manager.h',
     'cinnamon-util.h',
     'cinnamon-window-tracker.h',
     'cinnamon-wm.h',
-    'cinnamon-xfixes-cursor.h',
 ]
 
 cinnamon_private_headers = [
@@ -46,19 +48,26 @@ cinnamon_sources = [
     'cinnamon-doc-system.c',
     'cinnamon-embedded-window.c',
     'cinnamon-generic-container.c',
-    'cinnamon-glsl-quad.c',
+    'cinnamon-glsl-effect.c',
     'cinnamon-gtk-embed.c',
     'cinnamon-global.c',
+    'cinnamon-keyring-prompt.c',
+    'cinnamon-keyring-prompt.h',
     'cinnamon-perf-log.c',
+    'cinnamon-polkit-authentication-agent.c',
+    'cinnamon-polkit-authentication-agent.h',
+    'cinnamon-screen.c',
     'cinnamon-screenshot.c',
+    'cinnamon-secure-text-buffer.c',
+    'cinnamon-secure-text-buffer.h',
     'cinnamon-slicer.c',
     'cinnamon-stack.c',
+    'cinnamon-touchegg-client.c',
     'cinnamon-tray-icon.c',
     'cinnamon-tray-manager.c',
     'cinnamon-util.c',
     'cinnamon-window-tracker.c',
     'cinnamon-wm.c',
-    'cinnamon-xfixes-cursor.c',
     cinnamon_headers,
     calendar_generated
 ]
@@ -89,6 +98,7 @@ libcinnamon_deps = [
     cogl,
     cogl_path,
     dbus,
+    gcr,
     gdkx11,
     gi,
     gio,
@@ -98,12 +108,20 @@ libcinnamon_deps = [
     muffin,
     pango,
     polkit,
-    sn,
-    soup,
     st_dep,
-    xfixes,
+    xapp,
+    xdo,
     xml,
 ]
+
+libcinnamon_deps += nm_deps
+
+if internal_nm_agent
+    cinnamon_sources += [
+        'cinnamon-network-agent.c',
+        'cinnamon-network-agent.h',
+    ]
+endif
 
 non_gir = []
 if get_option('build_recorder')
@@ -123,11 +141,15 @@ if get_option('build_recorder')
     ]
 endif
 
+install_rpath = ':'.join([muffin_typelibdir, pkglibdir])
+
+
 libcinnamon = library(
     'cinnamon',
     [cinnamon_sources, non_gir, tray_sources, st_enum_types[1]],
     include_directories: [include_root, include_directories('st', 'tray')],
-    install_rpath: join_paths(prefix, pkglibdir),
+    install_rpath: install_rpath,
+    build_rpath: muffin_typelibdir,
     dependencies: libcinnamon_deps,
     install: true,
     install_dir: pkglibdir,
@@ -147,18 +169,21 @@ executable(
     dependencies: [config_h, gtk],
     install: true,
     install_dir: libexecdir,
+    install_rpath: install_rpath,
+    build_rpath: muffin_typelibdir
 )
 
-js_tester = executable(
-    'run-js-test',
-    ['run-js-test.c', cinnamon_enum_types[1], st_enum_types[1]],
-    c_args: [
-        '-DCINNAMON_PKGLIBDIR="@0@"'.format(join_paths(prefix, pkglibdir)),
-    ],
-    include_directories: include_root,
-    dependencies: cinnamon_dep,
-    install: false,
-)
+# FIXME
+# js_tester = executable(
+#     'run-js-test',
+#     ['run-js-test.c', cinnamon_enum_types[1], st_enum_types[1]],
+#     c_args: [
+#         '-DCINNAMON_PKGLIBDIR="@0@"'.format(join_paths(prefix, pkglibdir)),
+#     ],
+#     include_directories: include_root,
+#     dependencies: cinnamon_dep,
+#     install: false,
+# )
 
 executable(
     'cinnamon',
@@ -167,22 +192,30 @@ executable(
         '-DLOCALEDIR="@0@"'.format(join_paths(prefix, datadir, 'locale')),
         '-DCINNAMON_PKGLIBDIR="@0@"'.format(join_paths(prefix, pkglibdir)),
     ],
-    install_rpath: ':'.join([join_paths(prefix, pkglibdir), muffinlibdir]),
-    include_directories: include_root,
+    install_rpath: install_rpath,
+    build_rpath: muffin_typelibdir,
+    include_directories: [include_root, st_inc],
     dependencies: cinnamon_dep,
     install: true,
 )
+
+subdir('screensaver')
 
 cinnamon_gir_includes = [
     'Clutter-0',
     'ClutterX11-0',
     'CoglPango-0',
     'Cogl-0',
-    'Meta-Muffin.0',
-    'Soup-2.4',
+    'Meta-0',
     'CMenu-3.0',
+    'Gcr-3',
+    'PolkitAgent-1.0',
     st_gir[0],
 ]
+
+if internal_nm_agent
+    cinnamon_gir_includes += ['NM-1.0']
+endif
 
 cinnamon_gir = gnome.generate_gir(
     libcinnamon,
@@ -196,7 +229,7 @@ cinnamon_gir = gnome.generate_gir(
     includes: cinnamon_gir_includes,
     install: true,
     install_dir_typelib: pkglibdir,
-    install_dir_gir: [false],
+    install_dir_gir: pkgdatadir,
     extra_args: [
         '-DST_COMPILATION',
         '--quiet',

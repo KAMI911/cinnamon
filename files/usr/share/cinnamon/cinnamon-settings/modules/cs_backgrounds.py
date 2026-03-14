@@ -1,7 +1,6 @@
 #!/usr/bin/python3
 
 import os
-import imtools
 import gettext
 import _thread as thread
 import subprocess
@@ -10,6 +9,7 @@ import time
 import hashlib
 import mimetypes
 import pickle
+import shutil
 from io import BytesIO
 from xml.etree import ElementTree
 
@@ -18,7 +18,7 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gio, Gtk, Gdk, GdkPixbuf, Pango, GLib
 
-from SettingsWidgets import SidePage
+from bin.SettingsWidgets import SidePage
 from xapp.GSettingsWidgets import *
 
 gettext.install("cinnamon", "/usr/share/locale")
@@ -43,6 +43,10 @@ BACKGROUND_ICONS_SIZE = 100
 
 BACKGROUND_COLLECTION_TYPE_DIRECTORY = "directory"
 BACKGROUND_COLLECTION_TYPE_XML = "xml"
+
+CONFIG_FOLDER = os.path.join(GLib.get_user_config_dir(), 'cinnamon', 'backgrounds')
+OLD_CONFIG_FOLDER = os.path.expanduser("~/.cinnamon/backgrounds")
+USER_FOLDERS_FILE_NAME = 'user-folders.lst'
 
 # even though pickle supports higher protocol versions, we want to version 2 because it's the latest
 # version supported by python2 which (at this time) is still used by older versions of Cinnamon.
@@ -145,13 +149,13 @@ class ColorsWidget(SettingsWidget):
 
     def on_combo_changed(self, widget, key):
         tree_iter = widget.get_active_iter()
-        if tree_iter != None:
+        if tree_iter is not None:
             value = widget.get_model()[tree_iter][0]
             self.settings.set_string(key, value)
             self.show_or_hide_color2(value)
 
     def show_or_hide_color2(self, value):
-        if (value == 'solid'):
+        if value == 'solid':
             self.color2_button.hide()
         else:
             self.color2_button.show()
@@ -184,7 +188,7 @@ class Module:
 
             self.xdg_pictures_directory = os.path.expanduser("~/Pictures")
             xdg_config = os.path.expanduser("~/.config/user-dirs.dirs")
-            if os.path.exists(xdg_config) and os.path.exists("/usr/bin/xdg-user-dir"):
+            if os.path.exists(xdg_config) and shutil.which("xdg-user-dir"):
                 path = subprocess.check_output(["xdg-user-dir", "PICTURES"]).decode("utf-8").rstrip("\n")
                 if os.path.exists(path):
                     self.xdg_pictures_directory = path
@@ -215,11 +219,11 @@ class Module:
             button_toolbar.set_icon_size(1)
             Gtk.StyleContext.add_class(Gtk.Widget.get_style_context(button_toolbar), "inline-toolbar")
             self.add_folder_button = Gtk.ToolButton.new(None, None)
-            self.add_folder_button.set_icon_name("list-add-symbolic")
+            self.add_folder_button.set_icon_name("xsi-list-add-symbolic")
             self.add_folder_button.set_tooltip_text(_("Add new folder"))
             self.add_folder_button.connect("clicked", lambda w: self.add_new_folder())
             self.remove_folder_button = Gtk.ToolButton.new(None, None)
-            self.remove_folder_button.set_icon_name("list-remove-symbolic")
+            self.remove_folder_button.set_icon_name("xsi-list-remove-symbolic")
             self.remove_folder_button.set_tooltip_text(_("Remove selected folder"))
             self.remove_folder_button.connect("clicked", lambda w: self.remove_folder())
             button_toolbar.insert(self.add_folder_button, 0)
@@ -322,12 +326,12 @@ class Module:
                 if i.endswith(".xml"):
                     xml_path = os.path.join(properties_dir, i)
                     display_name = i.replace(".xml", "").replace("-", " ").replace("_", " ").split(" ")[-1].capitalize()
-                    icon = "preferences-desktop-wallpaper-symbolic"
+                    icon = "xsi-wallpaper-symbolic"
                     order = 10
                     # Special case for Linux Mint. We don't want to use 'start-here' here as it wouldn't work depending on the theme.
                     # Also, other distros should get equal treatment. If they define cinnamon-backgrounds and use their own distro name, we should add support for it.
                     if display_name == "Retro":
-                        icon = "document-open-recent-symbolic"
+                        icon = "xsi-document-open-recent-symbolic"
                         order = 20 # place retro bgs at the end
                     if display_name == "Linuxmint":
                         display_name = "Linux Mint"
@@ -341,7 +345,9 @@ class Module:
 
     def get_user_backgrounds(self):
         self.user_backgrounds = []
-        path = os.path.expanduser("~/.cinnamon/backgrounds/user-folders.lst")
+        path = os.path.join(CONFIG_FOLDER, USER_FOLDERS_FILE_NAME)
+        old_path = os.path.join(OLD_CONFIG_FOLDER, USER_FOLDERS_FILE_NAME)
+        path = path if os.path.exists(path) else old_path
         if os.path.exists(path):
             with open(path) as f:
                 folders = f.readlines()
@@ -349,18 +355,18 @@ class Module:
                 folder_path = line.strip("\n")
                 folder_name = folder_path.split("/")[-1]
                 if folder_path == self.xdg_pictures_directory:
-                    icon = "folder-pictures-symbolic"
+                    icon = "xsi-folder-pictures-symbolic"
                 else:
-                    icon = "folder-symbolic"
+                    icon = "xsi-folder-symbolic"
                 self.user_backgrounds.append([False, icon, folder_name, folder_path, BACKGROUND_COLLECTION_TYPE_DIRECTORY])
         else:
             # Add XDG PICTURE DIR
-            self.user_backgrounds.append([False, "folder-pictures-symbolic", self.xdg_pictures_directory.split("/")[-1], self.xdg_pictures_directory, BACKGROUND_COLLECTION_TYPE_DIRECTORY])
+            self.user_backgrounds.append([False, "xsi-folder-pictures-symbolic", self.xdg_pictures_directory.split("/")[-1], self.xdg_pictures_directory, BACKGROUND_COLLECTION_TYPE_DIRECTORY])
             self.update_folder_list()
 
     def format_source(self, type, path):
         # returns 'type://path'
-        return ("%s://%s" % (type, path))
+        return f"{type}://{path}"
 
     def get_initial_path(self):
         try:
@@ -373,7 +379,7 @@ class Module:
             self.remove_folder_button.set_sensitive(True)
 
             if image_source != "" and "://" in image_source:
-                while tree_iter != None:
+                while tree_iter is not None:
                     if collection_source == image_source:
                         tree_path = self.collection_store.get_path(tree_iter)
                         self.folder_tree.set_cursor(tree_path)
@@ -427,7 +433,8 @@ class Module:
         if wallpaper:
             for key in wallpaper:
                 if key == "filename":
-                    self._background_schema.set_string("picture-uri", "file://" + wallpaper[key])
+                    gfile = Gio.File.new_for_path(wallpaper[key])
+                    self._background_schema.set_string("picture-uri", gfile.get_uri())
                 elif key == "options":
                     self._background_schema.set_string("picture-options", wallpaper[key])
 
@@ -442,9 +449,9 @@ class Module:
                     self.add_folder_dialog.hide()
                     return
             if folder_path == self.xdg_pictures_directory:
-                icon = "folder-pictures-symbolic"
+                icon = "xsi-folder-pictures-symbolic"
             else:
-                icon = "folder-symbolic"
+                icon = "xsi-folder-symbolic"
             self.user_backgrounds.append([False, icon, folder_name, folder_path, BACKGROUND_COLLECTION_TYPE_DIRECTORY])
             self.collection_store.append([False, icon, folder_name, folder_path, BACKGROUND_COLLECTION_TYPE_DIRECTORY])
             self.update_folder_list()
@@ -464,10 +471,10 @@ class Module:
                         break
 
     def update_folder_list(self):
-        path = os.path.expanduser("~/.cinnamon/backgrounds")
+        path = CONFIG_FOLDER
         if not os.path.exists(path):
             os.makedirs(path, mode=0o755, exist_ok=True)
-        path = os.path.expanduser("~/.cinnamon/backgrounds/user-folders.lst")
+        path = os.path.join(CONFIG_FOLDER, USER_FOLDERS_FILE_NAME)
         if len(self.user_backgrounds) == 0:
             file_data = ""
         else:
@@ -477,7 +484,7 @@ class Module:
                 if folder[STORE_PATH] == first_path:
                     continue
                 else:
-                    file_data += "%s\n" % folder[STORE_PATH]
+                    file_data += f"{folder[STORE_PATH]}\n"
 
         with open(path, "w") as f:
             f.write(file_data)
@@ -530,7 +537,7 @@ class Module:
     def parse_xml_backgrounds_list(self, filename):
         try:
             locAttrName = "{http://www.w3.org/XML/1998/namespace}lang"
-            loc = self.splitLocaleCode(locale.getdefaultlocale()[0])
+            loc = self.splitLocaleCode(locale.getlocale()[0])
             res = []
             subLocaleFound = False
             f = open(filename)
@@ -558,7 +565,7 @@ class Module:
                             res.append(wallpaperData)
             return res
         except Exception as detail:
-            print("Could not parse %s!" % filename)
+            print(f"Could not parse {filename}!")
             print(detail)
             return []
 
@@ -603,7 +610,7 @@ class PixCache(object):
                         os.remove(cache_filename)
 
                 if not loaded:
-                    if mimetype == "image/svg+xml":
+                    if mimetype in ("image/svg+xml", "image/avif", "image/jxl"):
                         # rasterize svg with Gdk-Pixbuf and convert to PIL Image
                         tmp_pix = GdkPixbuf.Pixbuf.new_from_file(filename)
                         mode = "RGBA" if tmp_pix.props.has_alpha else "RGB"
@@ -622,7 +629,10 @@ class PixCache(object):
                             img = Image.alpha_composite(bg_img, img)
                         img = img.convert("RGB")
                     if size:
-                        img.thumbnail((size, size), Image.ANTIALIAS)
+                        img.thumbnail((size, size), Image.LANCZOS)
+
+
+                    from bin import imtools
                     img = imtools.round_image(img, {}, False, None, 3, 255)
                     img = imtools.drop_shadow(img, 4, 4, background_color=(255, 255, 255, 0),
                                               shadow_color=0x444444, border=8, shadow_blur=3,
@@ -635,11 +645,11 @@ class PixCache(object):
                         with open(cache_filename, "wb") as cache_file:
                             pickle.dump([png_bytes.getvalue(), width, height], cache_file, PICKLE_PROTOCOL_VERSION)
                     except Exception as detail:
-                        print("Failed to save cache file: %s: %s" % (cache_filename, detail))
+                        print(f"Failed to save cache file: {cache_filename}: {detail}")
 
                     pix = [self._image_to_pixbuf(img), width, height]
             except Exception as detail:
-                print("Failed to convert %s: %s" % (filename, detail))
+                print(f"Failed to convert {filename}: {detail}")
                 pix = None
             if pix:
                 self._data[filename][size] = pix
@@ -762,19 +772,19 @@ class ThreadedIconView(Gtk.IconView):
                 if filename.endswith(".xml"):
                     filename = self.getFirstFileFromBackgroundXml(filename)
                 pix = PIX_CACHE.get_pix(filename, BACKGROUND_ICONS_SIZE)
-                if pix != None:
+                if pix is not None:
                     if "name" in to_load:
                         label = to_load["name"]
                     else:
                         label = os.path.split(to_load["filename"])[1]
                     if "artist" in to_load:
-                        artist = "%s\n" % to_load["artist"]
+                        artist = f"{to_load['artist']}\n"
                     else:
                         artist = ""
-                    dimensions = "%dx%d" % (pix[1], pix[2])
+                    dimensions = f"{pix[1]}x{pix[2]}"
 
                     self._loaded_data_lock.acquire()
-                    self._loaded_data.append((to_load, pix[0], "<b>%s</b>\n<sub>%s%s</sub>" % (label, artist, dimensions), path))
+                    self._loaded_data.append((to_load, pix[0], f"<b>{label}</b>\n<small>{artist}{dimensions}</small>", path))
                     self._loaded_data_lock.release()
 
         self._loading_lock.acquire()
@@ -794,8 +804,8 @@ class ThreadedIconView(Gtk.IconView):
                                 if len(staticNode) > 0 and staticNode[-1].tag == "size":
                                     return staticNode[-1].text
                                 return staticNode.text
-            print("Could not find filename in %s" % filename)
+            print(f"Could not find filename in {filename}")
             return None
         except Exception as detail:
-            print("Failed to read filename from %s: %s" % (filename, detail))
+            print(f"Failed to read filename from {filename}: {detail}")
             return None

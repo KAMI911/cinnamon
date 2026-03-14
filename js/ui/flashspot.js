@@ -1,16 +1,16 @@
 // -*- mode: js; js-indent-level: 4; indent-tabs-mode: nil -*-
 
-const Lang = imports.lang;
-
+const Clutter = imports.gi.Clutter;
+const GObject = imports.gi.GObject;
 const Lightbox = imports.ui.lightbox;
 const Main = imports.ui.main;
-const Tweener = imports.ui.tweener;
 
-const FLASHSPOT_ANIMATION_TIME = 0.4; // seconds
+const FLASHSPOT_ANIMATION_TIME = 200; // seconds
 
-var Flashspot = class Flashspot extends Lightbox.Lightbox {
-    constructor(area) {
-        super(
+var Flashspot = GObject.registerClass(
+class Flashspot extends Lightbox.Lightbox {
+    _init(area) {
+        super._init(
             Main.uiGroup,
             {
                 inhibitEvents: true,
@@ -19,27 +19,28 @@ var Flashspot = class Flashspot extends Lightbox.Lightbox {
             }
         );
 
-        this.actor.style_class = 'flashspot';
-        this.actor.set_position(area.x, area.y);
+        this.style_class = 'flashspot';
+        this.set_position(area.x, area.y);
         if (area.time)
-            this.animation_time = area.time;
+            this.animationTime = area.time;
         else
-            this.animation_time = FLASHSPOT_ANIMATION_TIME;
+            this.animationTime = FLASHSPOT_ANIMATION_TIME;
    }
 
    fire() {
-      this.actor.opacity = 255;
-      Tweener.addTween(this.actor,
-                      { opacity: 0,
-                        time: this.animation_time,
-                        transition: 'easeOutQuad',
-                        onComplete: Lang.bind(this, this._onFireShowComplete)
-                      });
-      this.actor.show();
+        this.show();
+        this.opacity = 255;
+        this.ease({
+            opacity: 0,
+            duration: this.animationTime,
+            animationRequired: true,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            onComplete: () => this._onFireShowComplete()
+        });
    }
 
    _onFireShowComplete () {
         this.destroy();
    }
-};
+});
 

@@ -125,7 +125,7 @@ PlaceDeviceInfo.prototype = {
         if (!this.isRemovable())
             return;
 
-        let mountOp = new Gio.MountOperation(this._mount);
+        let mountOp = new Gio.MountOperation();
         let drive = this._mount.get_drive();
         let volume = this._mount.get_volume();
 
@@ -166,7 +166,7 @@ PlaceDeviceInfo.prototype = {
             notification.setUrgency(persistent ? MessageTray.Urgency.CRITICAL : MessageTray.Urgency.NORMAL);
             if (withButton) {
                 notification.addButton('system-undo', _("Retry"));
-                notification.connect('action-invoked', Lang.bind(this, this.remove()));
+                notification.connect('action-invoked', Lang.bind(this, this.remove));
             }
             source.notify(notification);
             if (persistent) {
@@ -246,7 +246,7 @@ PlaceDeviceInfo.prototype = {
 
     _removeFinish: function(o, res, data) {
         if (DEBUG) global.log("PlacesManager: **_removeFinish**");
-        let msg1 = _("Succesfully unmounted %s (%s)").format(o.get_name(), this.name);
+        let msg1 = _("Successfully unmounted %s (%s)").format(o.get_name(), this.name);
         let msg2 = null;
         let btn = false;
 
@@ -329,23 +329,8 @@ PlacesManager.prototype = {
                 Gio.app_info_launch_default_for_uri(desktopUri, _makeLaunchContext(params));
             });
 
-        this._connect = new PlaceInfo('special:connect', _("Connect to..."),
-            function (size) {
-                return new St.Icon({ icon_name: 'applications-internet',
-                                     icon_type: St.IconType.FULLCOLOR,
-                                     icon_size: size });
-            },
-            function (params) {
-                // BUG: nemo-connect-server doesn't have a desktop file, so we can't
-                // launch it with the workspace from params. It's probably pretty rare
-                // and odd to drag this place onto a workspace in any case
-
-                Util.spawn(['nemo-connect-server']);
-            });
-
         this._defaultPlaces.push(this._home);
         this._defaultPlaces.push(this._desktopMenu);
-        this._defaultPlaces.push(this._connect);
 
         /*
         * Show devices, code more or less ported from nemo-places-sidebar.c
@@ -365,26 +350,40 @@ PlacesManager.prototype = {
 
         this._updateDevices();
 
-        this._bookmarksPath = GLib.build_filenamev([GLib.get_user_config_dir(), 'gtk-3.0', 'bookmarks']);
-        this._bookmarksFile = Gio.file_new_for_path(this._bookmarksPath);
+        this._bookmarksFile = null;
+        this._bookmarksPath = null;
 
-        if (!this._bookmarksFile.query_exists(null)) {
-            this._bookmarksPath = GLib.build_filenamev([GLib.get_home_dir(), '.gtk-bookmarks']);
-            this._bookmarksFile = Gio.file_new_for_path(this._bookmarksPath);
+        let bookmarksPath3 = GLib.build_filenamev([GLib.get_user_config_dir(), 'gtk-3.0', 'bookmarks']);
+        let bookmarksFile3 = Gio.file_new_for_path(bookmarksPath3);
+
+        if (!bookmarksFile3.query_exists(null)) {
+            let bookmarksPath2 = GLib.build_filenamev([GLib.get_home_dir(), '.gtk-bookmarks']);
+            let bookmarksFile2 = Gio.file_new_for_path(bookmarksPath2);
+
+            if (bookmarksFile2.query_exists(null)) {
+                this._bookmarksFile = bookmarksFile2;
+                this._bookmarksPath = bookmarksPath2;
+            }
         }
 
-        this.monitor = this._bookmarksFile.monitor_file(Gio.FileMonitorFlags.NONE, null);
+        if (this._bookmarksFile === null) {
+            this._bookmarksPath = bookmarksPath3;
+            this._bookmarksFile = bookmarksFile3;
+        }
+
         this._bookmarkTimeoutId = 0;
-        this.monitor.connect('changed', Lang.bind(this, function () {
+
+        this.monitor = this._bookmarksFile.monitor_file(Gio.FileMonitorFlags.NONE, null);
+        this.monitor.connect('changed', () => {
             if (this._bookmarkTimeoutId > 0)
                 return;
             /* Defensive event compression */
-            this._bookmarkTimeoutId = Mainloop.timeout_add(100, Lang.bind(this, function () {
+            this._bookmarkTimeoutId = Mainloop.timeout_add(100, () => {
                 this._bookmarkTimeoutId = 0;
                 this._reloadBookmarks();
-                return false;
-            }));
-        }));
+                return GLib.SOURCE_REMOVE;
+            });
+        });
 
         this._reloadBookmarks();
     },
@@ -469,9 +468,6 @@ PlacesManager.prototype = {
         /* add mounts that have no volume (/etc/mtab mounts, ftp, sftp,...) */
         let mounts = this._volumeMonitor.get_mounts();
         for(let i = 0; i < mounts.length; i++) {
-            if(mounts[i].is_shadowed())
-                continue;
-
             if(mounts[i].get_volume())
                 continue;
 
@@ -490,11 +486,17 @@ PlacesManager.prototype = {
     },
 
     _reloadBookmarks: function() {
-
+        let had_bookmarks = this._bookmarks.length > 0;
         this._bookmarks = [];
 
-        if (!GLib.file_test(this._bookmarksPath, GLib.FileTest.EXISTS))
+        if (!this._bookmarksFile.query_exists(null)) {
+            if (had_bookmarks) {
+                this.emit('bookmarks-updated');
+                this.emit('places-updated');
+            }
+
             return;
+        }
 
         let bookmarksContent = Cinnamon.get_file_contents_utf8_sync(this._bookmarksPath);
 
@@ -558,8 +560,10 @@ PlacesManager.prototype = {
     },
 
     _addMount: function(mount) {
-        let devItem = new PlaceDeviceInfo(mount);
-        this._mounts.push(devItem);
+        if(!mount.is_shadowed()) {
+            let devItem = new PlaceDeviceInfo(mount);
+            this._mounts.push(devItem);
+        }
     },
 
     getAllPlaces: function () {

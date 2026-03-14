@@ -4,7 +4,7 @@ import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk
 from xapp.SettingsWidgets import *
-from SettingsWidgets import SoundFileChooser, Keybinding
+from bin.SettingsWidgets import SoundFileChooser, Keybinding
 
 VARIABLE_TYPE_MAP = {
     "string"        :   str,
@@ -101,9 +101,11 @@ class List(SettingsWidget):
     bind_dir = None
 
     def __init__(self, label=None, columns=None, height=200, size_group=None, \
-                 dep_key=None, tooltip="", show_buttons=True):
+                 dep_key=None, tooltip="", show_buttons=True, hidden_buttons=[]):
         super(List, self).__init__(dep_key=dep_key)
         self.columns = columns
+        self.show_buttons = show_buttons
+        self.hidden_buttons = hidden_buttons
 
         self.set_orientation(Gtk.Orientation.VERTICAL)
         self.set_spacing(0)
@@ -150,13 +152,13 @@ class List(SettingsWidget):
             column = Gtk.TreeViewColumn(column_def['title'], renderer)
 
             if has_option_map:
-                def map_func(col, rend, model, row_iter, options):
-                    value = model[row_iter][i]
-                    for key, val in options.items():
+                def map_func(col, rend, model, row_iter, data):
+                    value = model[row_iter][data[1]]
+                    for key, val in data[0].items():
                         if val == value:
                             rend.set_property('text', key)
 
-                column.set_cell_data_func(renderer, map_func, column_def['options'])
+                column.set_cell_data_func(renderer, map_func, [column_def['options'],i])
             else:
                 column.add_attribute(renderer, prop_name, i)
 
@@ -177,34 +179,39 @@ class List(SettingsWidget):
             self.pack_start(button_toolbar, False, False, 0)
 
             self.add_button = Gtk.ToolButton(None, None)
-            self.add_button.set_icon_name("list-add-symbolic")
+            self.add_button.set_icon_name("xsi-list-add-symbolic")
             self.add_button.set_tooltip_text(_("Add new entry"))
             self.add_button.connect("clicked", self.add_item)
             self.remove_button = Gtk.ToolButton(None, None)
-            self.remove_button.set_icon_name("list-remove-symbolic")
+            self.remove_button.set_icon_name("xsi-list-remove-symbolic")
             self.remove_button.set_tooltip_text(_("Remove selected entry"))
             self.remove_button.connect("clicked", self.remove_item)
             self.remove_button.set_sensitive(False)
             self.edit_button = Gtk.ToolButton(None, None)
-            self.edit_button.set_icon_name("list-edit-symbolic")
+            self.edit_button.set_icon_name("xsi-list-edit-symbolic")
             self.edit_button.set_tooltip_text(_("Edit selected entry"))
             self.edit_button.connect("clicked", self.edit_item)
             self.edit_button.set_sensitive(False)
             self.move_up_button = Gtk.ToolButton(None, None)
-            self.move_up_button.set_icon_name("go-up-symbolic")
+            self.move_up_button.set_icon_name("xsi-go-up-symbolic")
             self.move_up_button.set_tooltip_text(_("Move selected entry up"))
             self.move_up_button.connect("clicked", self.move_item_up)
             self.move_up_button.set_sensitive(False)
             self.move_down_button = Gtk.ToolButton(None, None)
-            self.move_down_button.set_icon_name("go-down-symbolic")
+            self.move_down_button.set_icon_name("xsi-go-down-symbolic")
             self.move_down_button.set_tooltip_text(_("Move selected entry down"))
             self.move_down_button.connect("clicked", self.move_item_down)
             self.move_down_button.set_sensitive(False)
-            button_toolbar.insert(self.add_button, 0)
-            button_toolbar.insert(self.remove_button, 1)
-            button_toolbar.insert(self.edit_button, 2)
-            button_toolbar.insert(self.move_up_button, 3)
-            button_toolbar.insert(self.move_down_button, 4)
+            if "+" not in self.hidden_buttons:
+                button_toolbar.insert(self.add_button, 0)
+            if "-" not in self.hidden_buttons:
+                button_toolbar.insert(self.remove_button, 1)
+            if "edit" not in self.hidden_buttons:
+                button_toolbar.insert(self.edit_button, 2)
+            if "up" not in self.hidden_buttons:
+                button_toolbar.insert(self.move_up_button, 3)
+            if "down" not in self.hidden_buttons:
+                button_toolbar.insert(self.move_down_button, 4)
 
         self.content_widget.get_selection().connect("changed", self.update_button_sensitivity)
         self.content_widget.set_activate_on_single_click(False)
@@ -213,6 +220,8 @@ class List(SettingsWidget):
         self.set_tooltip_text(tooltip)
 
     def update_button_sensitivity(self, *args):
+        if not self.show_buttons:
+            return
         model, selected = self.content_widget.get_selection().get_selected()
         if selected is None:
             self.remove_button.set_sensitive(False)

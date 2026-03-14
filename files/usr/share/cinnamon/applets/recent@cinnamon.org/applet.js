@@ -1,3 +1,4 @@
+const Clutter = imports.gi.Clutter;
 const DocInfo = imports.misc.docInfo;
 const Gtk = imports.gi.Gtk;
 const Gio = imports.gi.Gio;
@@ -21,7 +22,10 @@ class MyPopupMenuItem extends PopupMenu.PopupBaseMenuItem {
             this.box.add(this.icon);
         }
 
-        this.label = new St.Label({ text: text });
+        this.label = new St.Label({
+            text: text,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
         this.box.add(this.label);
         this.addActor(this.box);
     }
@@ -31,7 +35,7 @@ class CinnamonRecentApplet extends Applet.IconApplet {
     constructor(orientation, panel_height, instance_id) {
         super(orientation, panel_height, instance_id);
 
-        this.set_applet_icon_symbolic_name("document-open-recent");
+        this.set_applet_icon_symbolic_name("xsi-document-open-recent");
         this.set_applet_tooltip(_("Recent documents"));
 
         this.menuManager = new PopupMenu.PopupMenuManager(this);
@@ -47,7 +51,7 @@ class CinnamonRecentApplet extends Applet.IconApplet {
 
         this.recentsBox = new St.BoxLayout({ vertical:true });
         this.recentsScrollBox.add_actor(this.recentsBox);
-        this.recentsScrollBox.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC);
+        this.recentsScrollBox.set_policy(St.PolicyType.NEVER, St.PolicyType.AUTOMATIC);
 
         this.RecentManager = DocInfo.getDocManager();
         this.privacy_settings = new Gio.Settings( {schema_id: PRIVACY_SCHEMA} );
@@ -117,7 +121,7 @@ class CinnamonRecentApplet extends Applet.IconApplet {
                 let separator = new PopupMenu.PopupSeparatorMenuItem();
                 this._recentButtons.push(separator);
                 this.recentsBox.add_child(separator.actor);
-                let icon = new St.Icon({ icon_name: 'edit-clear', icon_type: St.IconType.SYMBOLIC, icon_size: 22 });
+                let icon = new St.Icon({ icon_name: 'xsi-edit-clear', icon_type: St.IconType.SYMBOLIC, icon_size: 22 });
                 let clear_button = new MyPopupMenuItem(icon, _("Clear list"), "clear", {});
                 clear_button.connect('activate', Lang.bind(this, this._clearAll));
                 this._recentButtons.push(clear_button);

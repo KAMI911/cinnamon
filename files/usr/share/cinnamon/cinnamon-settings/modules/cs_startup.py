@@ -9,7 +9,7 @@ import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gio, Gtk, Gdk, GdkPixbuf, GLib, Pango
 
-from SettingsWidgets import SidePage
+from bin.SettingsWidgets import SidePage
 from xapp.GSettingsWidgets import *
 
 try:
@@ -84,7 +84,7 @@ class Module:
             try:
                 os.makedirs(user_autostart_dir)
             except:
-                print("Could not create autostart dir: %s" % user_autostart_dir)
+                print(f"Could not create autostart dir: {user_autostart_dir}")
 
     def gather_apps(self):
         system_files = []
@@ -111,7 +111,7 @@ class Module:
                 AUTOSTART_APPS[key] = AutostartApp(sys_app,
                                                    system_position=os.path.dirname(sys_app))
 
-class AutostartApp():
+class AutostartApp:
     def __init__(self, app, user_position=None, system_position=None):
         self.app = app
         self.user_position = user_position
@@ -129,7 +129,7 @@ class AutostartApp():
         try:
             self.key_file.load_from_file(self.app, KEYFILE_FLAGS)
         except GLib.GError as e:
-            print("Failed to load %s" % self.app, e)
+            print(f"Failed to load {self.app}", e)
             return
 
         self.key_file_loaded = True
@@ -220,14 +220,14 @@ class AutostartApp():
         try:
             key_file = GLib.KeyFile.new()
 
-            if self.user_position == None:
+            if self.user_position is None:
                 self.user_position = os.path.join(GLib.get_user_config_dir(), "autostart")
                 self.path = os.path.join(self.user_position, self.basename)
                 key_file.load_from_file(os.path.join(self.system_position, self.basename), KEYFILE_FLAGS)
             else:
                 key_file.load_from_file(self.path, KEYFILE_FLAGS)
         except Exception as e:
-            print("Problem creating user keyfile: %s" % e)
+            print(f"Problem creating user keyfile: {e}")
             key_file.set_string(D_GROUP, GLib.KEY_FILE_DESKTOP_KEY_TYPE, "Application")
             key_file.set_string(D_GROUP, GLib.KEY_FILE_DESKTOP_KEY_EXEC, "/bin/false")
 
@@ -360,7 +360,7 @@ class AutostartApp():
 
         return current_locale
 
-class SaveMask():
+class SaveMask:
     def __init__(self):
         self.contents = []
         self.all = ["enabled", "no-display", "hidden", "name", "comment", "command", "delay"]
@@ -421,27 +421,27 @@ class AutostartBox(Gtk.Box):
         box.set_halign(Gtk.Align.CENTER)
         button_holder.add(box)
 
-        self.add_button = Gtk.Button.new_from_icon_name("list-add-symbolic", Gtk.IconSize.BUTTON)
+        self.add_button = Gtk.Button.new_from_icon_name("xsi-list-add-symbolic", Gtk.IconSize.BUTTON)
         self.add_button.set_tooltip_text(_("Add"))
         self.add_button.connect("clicked", self.on_add_button_clicked)
         button_group.add_widget(self.add_button)
         box.add(self.add_button)
 
-        self.edit_button = Gtk.Button.new_from_icon_name("document-edit-symbolic", Gtk.IconSize.BUTTON)
+        self.edit_button = Gtk.Button.new_from_icon_name("xsi-document-edit-symbolic", Gtk.IconSize.BUTTON)
         self.edit_button.set_tooltip_text(_("Edit"))
         self.edit_button.connect("clicked", self.on_edit_button_clicked)
         button_group.add_widget(self.edit_button)
         self.edit_button.set_sensitive(False)
         box.add(self.edit_button)
 
-        self.remove_button = Gtk.Button.new_from_icon_name("list-remove-symbolic", Gtk.IconSize.BUTTON)
+        self.remove_button = Gtk.Button.new_from_icon_name("xsi-list-remove-symbolic", Gtk.IconSize.BUTTON)
         self.remove_button.set_tooltip_text(_("Remove"))
         self.remove_button.connect("clicked", self.on_remove_button_clicked)
         button_group.add_widget(self.remove_button)
         self.remove_button.set_sensitive(False)
         box.add(self.remove_button)
 
-        self.run_button = Gtk.Button.new_from_icon_name("system-run-symbolic", Gtk.IconSize.BUTTON)
+        self.run_button = Gtk.Button.new_from_icon_name("xsi-media-playback-start-symbolic", Gtk.IconSize.BUTTON)
         self.run_button.set_tooltip_text(_("Run now"))
         self.run_button.connect("clicked", self.on_run_button_clicked)
         button_group.add_widget(self.run_button)
@@ -471,7 +471,7 @@ class AutostartBox(Gtk.Box):
         self.on_edit_button_clicked(list_box)
 
     def on_run_button_clicked(self, button):
-        if self.infobar_holder.get_child() != None:
+        if self.infobar_holder.get_child() is not None:
             self.infobar_holder.get_child().destroy()
 
         row = self.list_box.get_selected_row()
@@ -584,7 +584,7 @@ class AutostartBox(Gtk.Box):
             try:
                 shutil.copyfile(desktop_file_dir, user_desktop_file)
             except IOError:
-                print("Failed to copy desktop file %s" % desktop_file_name)
+                print(f"Failed to copy desktop file {desktop_file_name}")
 
             app = AutostartApp(user_desktop_file, user_position=os.path.dirname(user_desktop_file))
             key = get_appname(user_desktop_file)
@@ -622,14 +622,14 @@ class AutostartBox(Gtk.Box):
         else:
             base_path = os.path.join(GLib.get_user_config_dir(), "autostart", suggested_name)
 
-        filename = "%s.desktop" % base_path
+        filename = f"{base_path}.desktop"
         basename = os.path.basename(filename)
 
         i = 1
         max_tries = 100
         while (self.find_app_with_basename(basename) is not None and
                i < max_tries):
-            filename = "%s-%d.desktop" % (base_path, i)
+            filename = f"{base_path}-{i}.desktop"
             basename = os.path.basename(filename)
             i += 1
 
@@ -657,7 +657,7 @@ class AutostartBox(Gtk.Box):
         y = window_y + wrect.y + wrect.height
 
         push_in = True
-        return (x, y, push_in)
+        return x, y, push_in
 
 class AutostartRow(Gtk.ListBoxRow):
     def __init__(self, app):
@@ -863,7 +863,7 @@ class AppDialog(Gtk.Dialog):
             if error_msg is not None:
                 msg_box = Gtk.MessageDialog(self, 0, Gtk.MessageType.ERROR,
                                             Gtk.ButtonsType.CANCEL,
-                                            "%s" % error_msg)
+                                            error_msg)
                 error_msg = None
                 msg_box.run()
                 msg_box.destroy()
@@ -899,6 +899,8 @@ class AppDialog(Gtk.Dialog):
 
         if response == Gtk.ResponseType.ACCEPT:
             name = chooser.get_filename()
+            if " " in name:
+                name = '"' + name + '"'
             self.command_entry.set_text(name)
 
         chooser.destroy()
@@ -916,6 +918,7 @@ class AppChooserDialog(Gtk.Dialog):
         self.search_bar = Gtk.SearchBar()
         self.search_bar.add(self.entry)
         self.search_bar.props.hexpand = True
+        self.search_bar.set_search_mode(True)
 
         list_box = Gtk.ListBox()
         list_box.set_sort_func(self.sort_apps, None)

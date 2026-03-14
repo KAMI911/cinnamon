@@ -35,6 +35,7 @@
 #include "st-widget.h"
 
 #include "st-background-effect.h"
+#include "st-debug.h"
 #include "st-label.h"
 #include "st-private.h"
 #include "st-texture-cache.h"
@@ -59,6 +60,8 @@ struct _StWidgetPrivate
   gchar        *inline_style;
 
   StThemeNodeTransition *transition_animation;
+  StBackgroundBlurEffect *background_blur_effect;
+  StBackgroundBumpmapEffect *background_bumpmap_effect;
 
   guint      is_style_dirty : 1;
   guint      draw_bg_color : 1;
@@ -122,12 +125,12 @@ enum
 
 static guint signals[LAST_SIGNAL] = { 0, };
 
-gfloat st_slow_down_factor = 1.0;
-
 G_DEFINE_TYPE_WITH_PRIVATE (StWidget, st_widget, CLUTTER_TYPE_ACTOR);
 
 static void st_widget_recompute_style (StWidget    *widget,
                                        StThemeNode *old_theme_node);
+static void st_widget_add_background_effects (StWidget    *widget,
+                                              StThemeNode *old_theme_node);
 static gboolean st_widget_real_navigate_focus (StWidget         *widget,
                                                ClutterActor     *from,
                                                GtkDirectionType  direction);
@@ -278,6 +281,18 @@ st_widget_dispose (GObject *gobject)
   st_widget_remove_transition (actor);
 
   g_clear_pointer (&priv->label_actor, g_object_unref);
+  if (priv->background_blur_effect)
+    {
+      g_object_run_dispose (G_OBJECT (priv->background_blur_effect));
+      g_object_unref (priv->background_blur_effect);
+      priv->background_blur_effect = NULL;
+    }
+  if (priv->background_bumpmap_effect)
+    {
+      g_object_run_dispose (G_OBJECT (priv->background_bumpmap_effect));
+      g_object_unref (priv->background_bumpmap_effect);
+      priv->background_bumpmap_effect = NULL;
+    }
 
   g_clear_object (&priv->prev_first_child);
   g_clear_object (&priv->prev_last_child);
@@ -361,11 +376,11 @@ st_widget_allocate (ClutterActor          *actor,
  * @widget: The #StWidget
  *
  * Paint the background of the widget. This is meant to be called by
- * subclasses of StWiget that need to paint the background without
+ * subclasses of StWidget that need to paint the background without
  * painting children.
  */
 void
-st_widget_paint_background (StWidget *widget)
+st_widget_paint_background (StWidget *widget, ClutterPaintContext *paint_context)
 {
   StThemeNode *theme_node;
   ClutterActorBox allocation;
@@ -380,33 +395,34 @@ st_widget_paint_background (StWidget *widget)
   if (widget->priv->transition_animation)
     st_theme_node_transition_paint (widget->priv->transition_animation,
                                     &allocation,
+                                    paint_context,
                                     opacity);
   else
-    st_theme_node_paint (theme_node, cogl_get_draw_framebuffer (), &allocation, opacity);
+    {
+      if ((theme_node->background_blur > 0 || theme_node->background_bumpmap)
+          && widget->priv->background_blur_effect == NULL
+          && widget->priv->background_bumpmap_effect == NULL)
+        {
+          st_widget_add_background_effects(widget, NULL);
+        }
 
-  // ClutterEffect *effect = clutter_actor_get_effect (actor, "background-effect");
-
-  // if (effect == NULL)
-  //   {
-  //     effect = st_background_effect_new ();
-  //     clutter_actor_add_effect_with_name (actor, "background-effect", effect);
-  //   }
-
-  // const char *bumpmap_path = st_theme_node_get_background_bumpmap(theme_node);
-
-  // g_object_set (effect,
-  //               "bumpmap",
-  //               bumpmap_path,
-  //               NULL);
+      CoglFramebuffer *fb = clutter_paint_context_get_framebuffer (paint_context);
+      st_theme_node_paint (theme_node,
+                           fb,
+                           &allocation,
+                           opacity,
+                           widget->priv->background_blur_effect,
+                           widget->priv->background_bumpmap_effect);
+    }
 }
 
  static void
-st_widget_paint (ClutterActor *actor)
+st_widget_paint (ClutterActor *actor, ClutterPaintContext *paint_context)
 {
-  st_widget_paint_background (ST_WIDGET (actor));
+  st_widget_paint_background (ST_WIDGET (actor), paint_context);
 
   /* Chain up so we paint children. */
-  CLUTTER_ACTOR_CLASS (st_widget_parent_class)->paint (actor);
+  CLUTTER_ACTOR_CLASS (st_widget_parent_class)->paint (actor, paint_context);
 }
 
 static void
@@ -486,8 +502,15 @@ st_widget_style_changed (StWidget *widget)
     }
 
   /* update the style only if we are mapped */
-  if (clutter_actor_is_mapped (CLUTTER_ACTOR (widget)))
-    st_widget_recompute_style (widget, old_theme_node);
+  if (clutter_actor_is_mapped (CLUTTER_ACTOR (widget))
+  || (old_theme_node != NULL &&
+      (old_theme_node->background_blur > 0
+       || old_theme_node->background_bumpmap != NULL)))
+    {
+      st_widget_recompute_style (widget, old_theme_node);
+
+      st_widget_add_background_effects(widget, old_theme_node);
+    }
 
   if (old_theme_node)
     g_object_unref (old_theme_node);
@@ -561,6 +584,7 @@ st_widget_get_theme_node (StWidget *widget)
         {
           g_critical ("st_widget_get_theme_node called on the widget %s which is not in the stage.",
                     st_describe_actor (CLUTTER_ACTOR (widget)));
+          st_dump_js_stack ();
           return g_object_new (ST_TYPE_THEME_NODE, NULL);
         }
 
@@ -706,7 +730,7 @@ st_widget_get_paint_volume (ClutterActor *self, ClutterPaintVolume *volume)
   ClutterActorBox paint_box, alloc_box;
   StThemeNode *theme_node;
   StWidgetPrivate *priv;
-  ClutterVertex origin;
+  graphene_point3d_t origin;
 
   /* Setting the paint volume does not make sense when we don't have any allocation */
   if (!clutter_actor_has_allocation (self))
@@ -1468,6 +1492,17 @@ st_widget_name_notify (StWidget   *widget,
 }
 
 static void
+st_widget_reactive_notify (StWidget   *widget,
+                           GParamSpec *pspec,
+                           gpointer    data)
+{
+  if (clutter_actor_get_reactive (CLUTTER_ACTOR (widget)))
+    st_widget_remove_style_pseudo_class (widget, "insensitive");
+  else
+    st_widget_add_style_pseudo_class (widget, "insensitive");
+}
+
+static void
 st_widget_first_child_notify (StWidget   *widget,
                               GParamSpec *pspec,
                               gpointer    data)
@@ -1524,10 +1559,13 @@ st_widget_init (StWidget *actor)
 
   actor->priv = priv = st_widget_get_instance_private (actor);
   priv->transition_animation = NULL;
+  priv->background_blur_effect = NULL;
+  priv->background_bumpmap_effect = NULL;
   priv->local_state_set = atk_state_set_new ();
 
   /* connect style changed */
   g_signal_connect (actor, "notify::name", G_CALLBACK (st_widget_name_notify), NULL);
+  g_signal_connect (actor, "notify::reactive", G_CALLBACK (st_widget_reactive_notify), NULL);
 
   g_signal_connect (actor, "notify::first-child", G_CALLBACK (st_widget_first_child_notify), NULL);
   g_signal_connect (actor, "notify::last-child", G_CALLBACK (st_widget_last_child_notify), NULL);
@@ -1538,6 +1576,61 @@ on_transition_completed (StThemeNodeTransition *transition,
                          StWidget              *widget)
 {
   st_widget_remove_transition (widget);
+}
+
+static void st_widget_add_background_effects (StWidget    *widget,
+                                              StThemeNode *old_theme_node )
+{
+StThemeNode *new_theme_node = st_widget_get_theme_node (widget);
+
+  if (old_theme_node)
+    {
+      if (old_theme_node->background_blur > 0)
+        {
+          if (widget->priv->background_blur_effect != NULL)
+            {
+              g_object_run_dispose (G_OBJECT (widget->priv->background_blur_effect));
+              g_object_unref (widget->priv->background_blur_effect);
+              widget->priv->background_blur_effect = NULL;
+            }
+        }
+      if (old_theme_node->background_bumpmap != NULL)
+        {
+          if (widget->priv->background_bumpmap_effect != NULL)
+            {
+              g_object_run_dispose (G_OBJECT (widget->priv->background_bumpmap_effect));
+              g_object_unref (widget->priv->background_bumpmap_effect);
+              widget->priv->background_bumpmap_effect = NULL;
+            }
+        }
+    }
+
+  if (new_theme_node)
+    {
+      if (new_theme_node->background_blur > 0)
+        {
+          if (widget->priv->background_blur_effect == NULL)
+            {
+              widget->priv->background_blur_effect = (StBackgroundBlurEffect *) st_background_blur_effect_new (CLUTTER_ACTOR (widget));
+              widget->priv->background_blur_effect->blur_size = new_theme_node->background_blur;
+              for (int i=0; i<4; i++)
+                widget->priv->background_blur_effect->border_radius[i] = new_theme_node->border_radius[i];
+            }
+        }
+      if (new_theme_node->background_bumpmap != NULL)
+        {
+          if (widget->priv->background_bumpmap_effect == NULL)
+            {
+              const char *bumpmap_path;
+
+              widget->priv->background_bumpmap_effect = (StBackgroundBumpmapEffect *) st_background_bumpmap_effect_new (CLUTTER_ACTOR (widget));
+              bumpmap_path = st_theme_node_get_background_bumpmap(new_theme_node);
+              widget->priv->background_bumpmap_effect->bumpmap_path = strdup (bumpmap_path);
+              for (int i=0; i<4; i++)
+                widget->priv->background_bumpmap_effect->border_radius[i] = new_theme_node->border_radius[i];
+            }
+        }
+    }
 }
 
 static void
@@ -1762,14 +1855,12 @@ st_widget_set_hover (StWidget *widget,
 void
 st_widget_sync_hover (StWidget *widget)
 {
-  ClutterDeviceManager *device_manager;
-  ClutterInputDevice *pointer;
   ClutterActor *pointer_actor;
 
   if (widget->priv->track_hover) {
-    device_manager = clutter_device_manager_get_default ();
-    pointer = clutter_device_manager_get_core_device (device_manager,
-                                                      CLUTTER_POINTER_DEVICE);
+    ClutterSeat *seat = clutter_backend_get_default_seat (clutter_get_default_backend ());
+    ClutterInputDevice *pointer = clutter_seat_get_pointer (seat);
+
     pointer_actor = clutter_input_device_get_pointer_actor (pointer);
     if (pointer_actor)
       st_widget_set_hover (widget, clutter_actor_contains (CLUTTER_ACTOR (widget), pointer_actor));
@@ -2277,30 +2368,6 @@ st_describe_actor (ClutterActor *actor)
 }
 
 /**
- * st_set_slow_down_factor:
- * @factor: new slow-down factor
- *
- * Set a global factor applied to all animation durations
- */
-void
-st_set_slow_down_factor (gfloat factor)
-{
-  st_slow_down_factor = factor;
-}
-
-/**
- * st_get_slow_down_factor:
- *
- * Returns: the global factor applied to all animation durations
- */
-gfloat
-st_get_slow_down_factor (void)
-{
-  return st_slow_down_factor;
-}
-
-
-/**
  * st_widget_get_label_actor:
  * @widget: a #StWidget
  *
@@ -2319,7 +2386,7 @@ st_widget_get_label_actor (StWidget *widget)
 /**
  * st_widget_set_label_actor:
  * @widget: a #StWidget
- * @label: a #ClutterActor
+ * @label: (nullable): a #ClutterActor
  *
  * Sets @label as the #ClutterActor that identifies (labels)
  * @widget. @label can be %NULL to indicate that @widget is not

@@ -16,12 +16,11 @@ const Main = imports.ui.main;
 const ModalDialog = imports.ui.modalDialog;
 const PopupMenu = imports.ui.popupMenu;
 const Tooltips = imports.ui.tooltips;
-const Tweener = imports.ui.tweener;
 const Gettext = imports.gettext;
 
 
 const RIGHT_PANEL_POPUP_ANIMATE_TIME = 0.5;
-const DESKLET_DESTROY_TIME = 0.5;
+const DESKLET_DESTROY_TIME = 500;
 
 /**
  * #Desklet
@@ -124,15 +123,17 @@ var Desklet = class Desklet {
      *
      * Destroys the actor with an fading animation
      */
-    destroy(deleteConfig){
-        Tweener.addTween(this.actor,
-                         { opacity: 0,
-                           transition: 'linear',
-                           time: DESKLET_DESTROY_TIME,
-                           onComplete: Lang.bind(this, function(){
-                               this.on_desklet_removed(deleteConfig);
-                               this.actor.destroy();
-                           })});
+    destroy(deleteConfig) {
+        this.actor.ease({
+            opacity: 0,
+            duration: DESKLET_DESTROY_TIME,
+            mode: Clutter.AnimationMode.LINEAR,
+            onComplete: () => {
+                this.on_desklet_removed(deleteConfig);
+                this.actor.destroy();
+            }
+        });
+
         this._menu.destroy();
 
         this._menu = null;
@@ -232,7 +233,7 @@ var Desklet = class Desklet {
 
         if (!this._meta["hide-configuration"] && GLib.file_test(this._meta["path"] + "/settings-schema.json", GLib.FileTest.EXISTS)) {
             this.context_menu_item_configure = new PopupMenu.PopupMenuItem(_("Configure..."));
-            this.context_menu_item_configure.connect("activate", Lang.bind(this, this.configureDesklet));
+            this.context_menu_item_configure.connect("activate", (e) => this.configureDesklet());
             this._menu.addMenuItem(this.context_menu_item_configure);
         }
 
@@ -278,6 +279,11 @@ var Desklet = class Desklet {
     }
 
     configureDesklet(tab=0) {
+        if (typeof tab !== "number") {
+            global.logWarning("configureDesklet: tab argument is not a number");
+            tab = 0;
+        }
+
         Util.spawnCommandLine("xlet-settings desklet " + this._uuid + " -i " + this.instance_id + " -t " + tab);
     }
 }

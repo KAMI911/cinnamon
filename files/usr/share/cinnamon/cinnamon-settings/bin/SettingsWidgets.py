@@ -9,8 +9,11 @@ from gi.repository import Gio, Gtk, GObject, GLib
 
 from xapp.SettingsWidgets import SettingsWidget, SettingsLabel
 from xapp.GSettingsWidgets import PXGSettingsBackend
-from ChooserButtonWidgets import DateChooserButton, TimeChooserButton
-from KeybindingWidgets import ButtonKeybinding
+from bin.ChooserButtonWidgets import DateChooserButton, TimeChooserButton
+from bin.KeybindingWidgets import ButtonKeybinding
+from bin import util
+
+from bin import KeybindingTable
 
 settings_objects = {}
 
@@ -27,7 +30,7 @@ class BinFileMonitor(GObject.GObject):
 
         env = GLib.getenv("PATH")
 
-        if env == None:
+        if env is None:
             env = "/bin:/usr/bin:."
 
         self.paths = env.split(":")
@@ -36,9 +39,12 @@ class BinFileMonitor(GObject.GObject):
 
         for path in self.paths:
             file = Gio.File.new_for_path(path)
-            mon = file.monitor_directory(Gio.FileMonitorFlags.SEND_MOVED, None)
-            mon.connect("changed", self.queue_emit_changed)
-            self.monitors.append(mon)
+            try:
+                mon = file.monitor_directory(Gio.FileMonitorFlags.SEND_MOVED, None)
+                mon.connect("changed", self.queue_emit_changed)
+                self.monitors.append(mon)
+            except GLib.Error as e:
+                pass
 
     def _emit_changed(self):
         self.emit("changed")
@@ -57,7 +63,7 @@ file_monitor = None
 def get_file_monitor():
     global file_monitor
 
-    if file_monitor == None:
+    if file_monitor is None:
         file_monitor = BinFileMonitor()
 
     return file_monitor
@@ -126,7 +132,7 @@ class DependencyCheckInstallButton(Gtk.Box):
         self.progress_source_id = GLib.timeout_add(200, self.pulse_progress)
 
     def cancel_pulse(self):
-        if (self.progress_source_id > 0):
+        if self.progress_source_id > 0:
             GLib.source_remove(self.progress_source_id)
             self.progress_source_id = 0
 
@@ -171,7 +177,7 @@ class GSettingsDependencySwitch(SettingsWidget):
             pkg_string += pkg
 
         self.dep_button = DependencyCheckInstallButton(_("Checking dependencies"),
-                                                       _("Please install: %s") % (pkg_string),
+                                                       _("Please install: %s") % pkg_string,
                                                        binfiles,
                                                        self.switch)
         self.content_widget.add(self.dep_button)
@@ -195,7 +201,7 @@ class SidePage(object):
         self.topWindow = None
         self.builder = None
         self.stack = None
-        if self.module != None:
+        if self.module is not None:
             self.module.loaded = False
 
     def add_widget(self, widget):
@@ -207,7 +213,7 @@ class SidePage(object):
         for widget in widgets:
             self.content_box.remove(widget)
 
-        if (self.module is not None):
+        if self.module is not None:
             self.module.on_module_selected()
             self.module.loaded = True
 
@@ -354,33 +360,17 @@ class SoundFileChooser(SettingsWidget):
         self.pack_end(self.content_widget, False, False, 0)
 
         self.play_button = Gtk.Button()
-        self.play_button.set_image(Gtk.Image.new_from_icon_name("media-playback-start-symbolic", Gtk.IconSize.BUTTON))
+        self.play_button.set_image(Gtk.Image.new_from_icon_name("xsi-media-playback-start-symbolic", Gtk.IconSize.BUTTON))
         self.play_button.connect("clicked", self.on_play_clicked)
         self.content_widget.pack_start(self.play_button, False, False, 0)
-
-        self._proxy = None
-
-        try:
-            Gio.DBusProxy.new_for_bus(Gio.BusType.SESSION, Gio.DBusProxyFlags.NONE, None,
-                                      'org.cinnamon.SettingsDaemon.Sound',
-                                      '/org/cinnamon/SettingsDaemon/Sound',
-                                      'org.cinnamon.SettingsDaemon.Sound',
-                                      None, self._on_proxy_ready, None)
-        except GLib.Error as e:
-            print(e.message)
-            self._proxy = None
-            self.play_button.set_sensitive(False)
 
         self.set_tooltip_text(tooltip)
 
         if size_group:
             self.add_to_size_group(size_group)
 
-    def _on_proxy_ready (self, object, result, data=None):
-        self._proxy = Gio.DBusProxy.new_for_bus_finish(result)
-
     def on_play_clicked(self, widget):
-        self._proxy.PlaySoundFile("(us)", 0, self.get_value())
+        util.play_sound_file(self.get_value())
 
     def on_picker_clicked(self, widget):
         dialog = Gtk.FileChooserDialog(title=self.label.get_text(),
@@ -403,7 +393,7 @@ class SoundFileChooser(SettingsWidget):
         sound_filter.set_name(_("Sound files"))
         dialog.add_filter(sound_filter)
 
-        if (dialog.run() == Gtk.ResponseType.ACCEPT):
+        if dialog.run() == Gtk.ResponseType.ACCEPT:
             name = dialog.get_filename()
             self.set_value(name)
             self.update_button_label(name)
@@ -486,6 +476,15 @@ class Keybinding(SettingsWidget):
         super(Keybinding, self).__init__(dep_key=dep_key)
 
         self.num_bind = num_bind
+        self.kb_table = KeybindingTable.get_default()
+        self.kb_label = label
+
+        if self.backend == "gsettings":
+            self.keybinding = self.kb_table.lookup_gsettings_keybinding(self.settings.props.schema_id, self.key)
+        else:
+            self.keybinding = self.kb_table.lookup_json_keybinding(self.settings.uuid, self.settings.instance_id, self.key)
+
+        self.keybinding.connect("changed", self.on_kb_table_entry_changed)
 
         self.label = SettingsLabel(label)
 
@@ -503,10 +502,11 @@ class Keybinding(SettingsWidget):
         for x in range(self.num_bind):
             if x != 0:
                 box.add(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL))
-            kb = ButtonKeybinding()
+            kb = ButtonKeybinding(position=x)
             kb.set_size_request(150, -1)
+            kb.set_accel_string(self.keybinding.entries[x] if self.keybinding else "")
             kb.connect("accel-edited", self.on_kb_changed)
-            kb.connect("accel-cleared", self.on_kb_changed)
+            kb.connect("accel-cleared", self.on_kb_cleared)
             box.pack_start(kb, False, False, 0)
             self.buttons.append(kb)
 
@@ -518,21 +518,24 @@ class Keybinding(SettingsWidget):
         if size_group:
             self.add_to_size_group(size_group)
 
-    def on_kb_changed(self, *args):
-        bindings = []
+    def on_kb_changed(self, button, accel_string, accel_label):
+        if self.keybinding:
+            if not self.kb_table.maybe_update_binding(self.keybinding, accel_string, accel_label, button.position):
+                self.on_kb_table_entry_changed(self.keybinding)
 
-        for x in range(self.num_bind):
-            string = self.buttons[x].get_accel_string()
-            bindings.append(string)
+    def on_kb_cleared(self, button):
+        if self.keybinding:
+            self.kb_table.clear_binding(self.keybinding, button.position)
 
-        self.set_value("::".join(bindings))
+    def on_kb_table_entry_changed(self, keybinding):
+        for x in range(0, self.num_bind):
+            try:
+                self.buttons[x].set_accel_string(keybinding.entries[x])
+            except IndexError:
+                self.buttons[x].set_accel_string("")
 
     def on_setting_changed(self, *args):
-        value = self.get_value()
-        bindings = value.split("::")
-
-        for x in range(min(len(bindings), self.num_bind)):
-            self.buttons[x].set_accel_string(bindings[x])
+        pass
 
     def connect_widget_handlers(self, *args):
         pass
@@ -540,9 +543,10 @@ class Keybinding(SettingsWidget):
 def g_settings_factory(subclass):
     class NewClass(globals()[subclass], PXGSettingsBackend):
         def __init__(self, label, schema, key, *args, **kwargs):
+            self.backend = "gsettings"
             self.key = key
             if schema not in settings_objects:
-                settings_objects[schema] = Gio.Settings.new(schema)
+                settings_objects[schema] = Gio.Settings(schema_id=schema)
             self.settings = settings_objects[schema]
 
             if "map_get" in kwargs:

@@ -1,12 +1,12 @@
 #!/usr/bin/python3
 
-from gi.repository import Gio, GLib
-import dbus, dbus.service, dbus.glib
-from dbus.mainloop.glib import DBusGMainLoop
 import random
+import signal
 import os, locale
 from xml.etree import ElementTree
 from setproctitle import setproctitle
+
+from gi.repository import Gio, GLib
 
 SLIDESHOW_DBUS_NAME = "org.Cinnamon.Slideshow"
 SLIDESHOW_DBUS_PATH = "/org/Cinnamon/Slideshow"
@@ -14,10 +14,23 @@ SLIDESHOW_DBUS_PATH = "/org/Cinnamon/Slideshow"
 BACKGROUND_COLLECTION_TYPE_DIRECTORY = "directory"
 BACKGROUND_COLLECTION_TYPE_XML = "xml"
 
-class CinnamonSlideshow(dbus.service.Object):
+# D-Bus interface XML definition
+DBUS_INTERFACE_XML = '''
+<node>
+    <interface name="org.Cinnamon.Slideshow">
+        <method name="begin" />
+        <method name="end" />
+        <method name="getNextImage" />
+    </interface>
+</node>
+'''
+
+class CinnamonSlideshowApplication(Gio.Application):
     def __init__(self):
-        bus_name = dbus.service.BusName(SLIDESHOW_DBUS_NAME, bus=dbus.SessionBus())
-        dbus.service.Object.__init__(self, bus_name, SLIDESHOW_DBUS_PATH)
+        super().__init__(
+            application_id=SLIDESHOW_DBUS_NAME,
+            flags=Gio.ApplicationFlags.IS_SERVICE
+        )
 
         self.slideshow_settings = Gio.Settings(schema="org.cinnamon.desktop.background.slideshow")
         self.background_settings = Gio.Settings(schema="org.cinnamon.desktop.background")
@@ -29,7 +42,8 @@ class CinnamonSlideshow(dbus.service.Object):
         self.used_image_playlist = []
         self.images_ready = False
         self.update_in_progress = False
-        self.current_image = self.background_settings.get_string("picture-uri")
+        self.starting_image = self.background_settings.get_string("picture-uri")
+        self.current_image = self.starting_image
 
         self.update_id = 0
         self.loop_counter = self.slideshow_settings.get_int("delay")
@@ -37,20 +51,77 @@ class CinnamonSlideshow(dbus.service.Object):
         self.folder_monitor = None
         self.folder_monitor_id = 0
 
-    @dbus.service.method(SLIDESHOW_DBUS_NAME, in_signature='', out_signature='')
+        self.connection = None
+        self.registration_id = 0
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGINT, self.end)
+
+    def do_startup(self):
+        Gio.Application.do_startup(self)
+        self.hold()
+
+    def do_dbus_register(self, connection, object_path):
+        try:
+            self.connection = connection
+            iface_info = Gio.DBusNodeInfo.new_for_xml(DBUS_INTERFACE_XML)
+            self.registration_id = connection.register_object(
+                SLIDESHOW_DBUS_PATH,
+                iface_info.interfaces[0],
+                self.handle_method_call,
+                None,  # get_property
+                None   # set_property
+            )
+        except Exception as e:
+            print(f"Failed to export slideshow service: {e}")
+            return False
+
+        return Gio.Application.do_dbus_register(self, connection, object_path)
+
+    def do_dbus_unregister(self, connection, path):
+        if self.registration_id > 0:
+            connection.unregister_object(self.registration_id)
+            self.registration_id = 0
+
+        Gio.Application.do_dbus_unregister(self, connection, path)
+
+    def do_activate(self):
+        self.setup_slideshow()
+
+    def handle_method_call(self, connection, sender, object_path, interface_name, method_name, parameters, invocation):
+        try:
+            if method_name == "begin":
+                self.begin()
+                invocation.return_value(None)
+            elif method_name == "end":
+                self.end()
+                invocation.return_value(None)
+            elif method_name == "getNextImage":
+                self.get_next_image()
+                invocation.return_value(None)
+            else:
+                invocation.return_error_literal(
+                    Gio.dbus_error_quark(),
+                    Gio.DBusError.UNKNOWN_METHOD,
+                    f"Unknown method: {method_name}"
+                )
+        except Exception as e:
+            invocation.return_error_literal(
+                Gio.dbus_error_quark(),
+                Gio.DBusError.FAILED,
+                str(e)
+            )
+
     def begin(self):
         self.setup_slideshow()
 
-    @dbus.service.method(SLIDESHOW_DBUS_NAME, in_signature='', out_signature='')
     def end(self):
         if self.update_id > 0:
             GLib.source_remove(self.update_id)
             self.update_id = 0
 
-        ml.quit()
+        self.disconnect_folder_monitor()
+        self.quit()
 
-    @dbus.service.method(SLIDESHOW_DBUS_NAME, in_signature='', out_signature='')
-    def getNextImage(self):
+    def get_next_image(self):
         if self.update_id > 0:
             GLib.source_remove(self.update_id)
             self.update_id = 0
@@ -68,7 +139,7 @@ class CinnamonSlideshow(dbus.service.Object):
 
     def format_source(self, type, path):
         # returns 'type://path'
-        return ("%s://%s" % (type, path))
+        return "%s://%s" % (type, path)
 
     def load_settings(self):
         self.random_order = self.slideshow_settings.get_boolean("random-order")
@@ -129,15 +200,15 @@ class CinnamonSlideshow(dbus.service.Object):
 
     def ensure_file_is_image(self, file_list):
         for item in file_list:
-            file_type = item.get_file_type();
+            file_type = item.get_file_type()
             if file_type is not Gio.FileType.DIRECTORY:
-                file_contents = item.get_content_type();
+                file_contents = item.get_content_type()
                 if file_contents.startswith("image"):
                     self.add_image_to_playlist(self.collection_path + "/" + item.get_name())
 
     def add_image_to_playlist(self, file_path):
         image = Gio.file_new_for_path(file_path)
-        image_uri = image.get_uri();
+        image_uri = image.get_uri()
         self.image_playlist.append(image_uri)
         if self.collection_type == BACKGROUND_COLLECTION_TYPE_DIRECTORY:
             self.image_playlist.sort()
@@ -166,7 +237,7 @@ class CinnamonSlideshow(dbus.service.Object):
     def on_monitored_folder_changed(self, monitor, file1, file2, event_type):
         try:
             if event_type == Gio.FileMonitorEvent.DELETED:
-                file_uri = file1.get_uri();
+                file_uri = file1.get_uri()
                 if self.image_playlist.count(file_uri) > 0:
                     index_to_remove = self.image_playlist.index(file_uri)
                     del self.image_playlist[index_to_remove]
@@ -179,7 +250,7 @@ class CinnamonSlideshow(dbus.service.Object):
                 file_info = file1.query_info("standard::type,standard::content-type", Gio.FileQueryInfoFlags.NONE, None)
                 file_type = file_info.get_file_type()
                 if file_type is not Gio.FileType.DIRECTORY:
-                    file_contents = file_info.get_content_type();
+                    file_contents = file_info.get_content_type()
                     if file_contents.startswith("image"):
                         self.add_image_to_playlist(file_path)
         except:
@@ -232,12 +303,27 @@ class CinnamonSlideshow(dbus.service.Object):
             index = random.randint(0, len(self.image_playlist) - 1)
             image = self.image_playlist[index]
         else:
+            self.maybe_skip_past_last_image()
             index = 0
             image = self.image_playlist[index]
 
         self.move_image_to_used_playlist(index, image)
 
         return image
+
+    def maybe_skip_past_last_image(self):
+        if self.starting_image is None:
+            return
+        # Check if the starting image is in our list (we've rebooted or otherwise a new process)
+        if self.starting_image in self.image_playlist:
+            # Make sure it's *not* the last image in our list. (We want to start over anyhow, if it is)
+            if self.image_playlist[-1] != self.starting_image:
+                # Move all images leading up to, and including this one, to the 'used' bin.
+                while self.image_playlist[0] != self.starting_image:
+                    self.move_image_to_used_playlist(0, self.image_playlist[0])
+                self.move_image_to_used_playlist(0, self.image_playlist[0])
+
+        self.starting_image = None
 
     def move_image_to_used_playlist(self, index, image):
         self.image_playlist.pop(index)
@@ -276,9 +362,8 @@ class CinnamonSlideshow(dbus.service.Object):
     def parse_xml_backgrounds_list(self, filename):
         try:
             locAttrName = "{http://www.w3.org/XML/1998/namespace}lang"
-            loc = self.splitLocaleCode(locale.getdefaultlocale()[0])
+            loc = self.splitLocaleCode(locale.getlocale()[0])
             res = []
-            subLocaleFound = False
             f = open(filename)
             rootNode = ElementTree.fromstring(f.read())
             f.close()
@@ -306,19 +391,9 @@ class CinnamonSlideshow(dbus.service.Object):
         except Exception as detail:
             print(detail)
             return []
-###############
 
 if __name__ == "__main__":
     setproctitle("cinnamon-slideshow")
-    DBusGMainLoop(set_as_default=True)
 
-    sessionBus = dbus.SessionBus ()
-    request = sessionBus.request_name(SLIDESHOW_DBUS_NAME, dbus.bus.NAME_FLAG_DO_NOT_QUEUE)
-    if request != dbus.bus.REQUEST_NAME_REPLY_EXISTS:
-        slideshow = CinnamonSlideshow()
-    else:
-        print("cinnamon-slideshow already running.")
-        quit()
-
-    ml = GLib.MainLoop.new(None, True)
-    ml.run()
+    app = CinnamonSlideshowApplication()
+    app.run()

@@ -1,11 +1,16 @@
 #!/usr/bin/python3
 
-from ChooserButtonWidgets import DateChooserButton, TimeChooserButton
-from SettingsWidgets import SidePage
+from bin.ChooserButtonWidgets import DateChooserButton, TimeChooserButton
+from bin.SettingsWidgets import SidePage
 from xapp.GSettingsWidgets import *
-import pytz
+from zoneinfo import ZoneInfo, available_timezones
 import gi
 import datetime
+import locale
+try:
+    from babel import Locale as BabelLocale
+except:
+    pass
 import os
 gi.require_version('TimezoneMap', '1.0')
 from gi.repository import TimezoneMap
@@ -64,6 +69,8 @@ class Module:
                 print('using systemd backend')
                 self.proxy_handler = SytemdDBusProxyHandler(self._on_proxy_ready)
 
+            self.sync_24h_to_gnome()
+
     def _on_proxy_ready(self):
         self.zone = self.proxy_handler.get_timezone()
         if self.zone is None:
@@ -79,6 +86,22 @@ class Module:
         self.ntp_switch.content_widget.set_active(is_using_ntp)
         self.ntp_switch.content_widget.connect('notify::active', self.on_ntp_changed)
         self.revealer.set_reveal_child(not is_using_ntp)
+
+    def sync_24h_to_gnome(self):
+        # Firefox (and maybe other apps?) check gnome's 24h setting only. It'd be
+        # messy to change it in firefox since our setting is a boolean and their's
+        # is a string, so just update the gnome preference when the user changes ours.
+        self.our_settings = Gio.Settings(schema_id="org.cinnamon.desktop.interface")
+        self.gnome_settings = Gio.Settings(schema_id="org.gnome.desktop.interface")
+
+        self.our_settings.connect("changed::clock-use-24h", self.update_gnome_24h)
+        self.update_gnome_24h()
+
+    def update_gnome_24h(self, settings=None, pspec=None):
+        if self.our_settings.get_boolean("clock-use-24h"):
+            self.gnome_settings.set_string("clock-format", "24h")
+        else:
+            self.gnome_settings.set_string("clock-format", "12h")
 
     def on_map_location_changed(self, *args):
         zone = self.tz_map.get_location().props.zone
@@ -107,8 +130,8 @@ class Module:
 
     def set_date_and_time(self, *args):
         unaware = datetime.datetime.combine(self.date_chooser.get_date(), self.time_chooser.get_time())
-        tz = pytz.timezone(self.zone)
-        self.datetime = tz.localize(unaware)
+        tz = ZoneInfo(self.zone)
+        self.datetime = unaware.replace(tzinfo=tz)
 
         seconds = int((self.datetime - datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)).total_seconds())
         self.proxy_handler.set_time(seconds)
@@ -164,7 +187,7 @@ class CsdDBusProxyHandler(object):
         try:
             Gio.DBusProxy.new_for_bus(Gio.BusType.SYSTEM, Gio.DBusProxyFlags.NONE, None,
                                       'org.cinnamon.SettingsDaemon.DateTimeMechanism',
-                                      '/',
+                                      '/org/cinnamon/SettingsDaemon/DateTimeMechanism',
                                       'org.cinnamon.SettingsDaemon.DateTimeMechanism',
                                       None, self._on_proxy_ready, None)
         except dbus.exceptions.DBusException as e:
@@ -193,6 +216,89 @@ class CsdDBusProxyHandler(object):
     def set_time(self, seconds):
         self._proxy.SetTime('(x)', seconds)
 
+
+# Timezones not in pytz.common_timezones - skip to match previous behavior
+SKIP_TIMEZONES = {
+    "Africa/Asmera",
+    "Africa/Timbuktu",
+    "America/Argentina/ComodRivadavia",
+    "America/Atka",
+    "America/Buenos_Aires",
+    "America/Catamarca",
+    "America/Coral_Harbour",
+    "America/Cordoba",
+    "America/Ensenada",
+    "America/Fort_Wayne",
+    "America/Godthab",
+    "America/Indianapolis",
+    "America/Jujuy",
+    "America/Knox_IN",
+    "America/Louisville",
+    "America/Mendoza",
+    "America/Montreal",
+    "America/Nipigon",
+    "America/Pangnirtung",
+    "America/Porto_Acre",
+    "America/Rainy_River",
+    "America/Rosario",
+    "America/Santa_Isabel",
+    "America/Shiprock",
+    "America/Thunder_Bay",
+    "America/Virgin",
+    "America/Yellowknife",
+    "Antarctica/South_Pole",
+    "Asia/Ashkhabad",
+    "Asia/Brunei",
+    "Asia/Calcutta",
+    "Asia/Choibalsan",
+    "Asia/Chongqing",
+    "Asia/Chungking",
+    "Asia/Dacca",
+    "Asia/Harbin",
+    "Asia/Istanbul",
+    "Asia/Kashgar",
+    "Asia/Katmandu",
+    "Asia/Macao",
+    "Asia/Rangoon",
+    "Asia/Saigon",
+    "Asia/Tel_Aviv",
+    "Asia/Thimbu",
+    "Asia/Ujung_Pandang",
+    "Asia/Ulan_Bator",
+    "Atlantic/Faeroe",
+    "Atlantic/Jan_Mayen",
+    "Australia/ACT",
+    "Australia/Canberra",
+    "Australia/Currie",
+    "Australia/LHI",
+    "Australia/North",
+    "Australia/NSW",
+    "Australia/Queensland",
+    "Australia/South",
+    "Australia/Tasmania",
+    "Australia/Victoria",
+    "Australia/West",
+    "Australia/Yancowinna",
+    "Canada/Saskatchewan",
+    "Canada/Yukon",
+    "Europe/Belfast",
+    "Europe/Kiev",
+    "Europe/Nicosia",
+    "Europe/Tiraspol",
+    "Europe/Uzhgorod",
+    "Europe/Zaporozhye",
+    "Pacific/Enderbury",
+    "Pacific/Johnston",
+    "Pacific/Ponape",
+    "Pacific/Samoa",
+    "Pacific/Truk",
+    "Pacific/Yap",
+    "US/Aleutian",
+    "US/East-Indiana",
+    "US/Indiana-Starke",
+    "US/Michigan",
+    "US/Samoa",
+}
 
 class TimeZoneSelector(SettingsWidget):
     __gsignals__ = {
@@ -223,21 +329,58 @@ class TimeZoneSelector(SettingsWidget):
         self.city_combo.add_attribute(renderer_text, "text", 1)
         self.city_combo.set_id_column(0)
 
+        REGION_NAMES = {
+            "Africa": _("Africa"),
+            "America": _("America"),
+            "Antarctica": _("Antarctica"),
+            "Arctic": _("Arctic"),
+            "Asia": _("Asia"),
+            "Atlantic": _("Atlantic Ocean"),
+            "Australia": _("Australia"),
+            "Canada": _("Canada"),
+            "Europe": _("Europe"),
+            "Indian": _("Indian Ocean"),
+            "Pacific": _("Pacific Ocean"),
+            "US": _("USA"),
+        }
+
         self.region_map = {}
-        for tz in pytz.common_timezones:
+        for tz in sorted(available_timezones()):
+            city_display_name = tz
+            region_display_name = tz
             try:
                 region, city = tz.split('/', maxsplit=1)
                 city_display_name = city.replace("_"," ")
+                region_display_name = region
             except:
                 continue
 
+            if region not in REGION_NAMES.keys():
+                continue
+
+            if tz in SKIP_TIMEZONES:
+                continue
+
+            try:
+                # localize city names (best effort, ignore exceptions)
+                loc = BabelLocale(locale.getlocale()[0])
+                city_display_name = loc.time_zones[tz]["city"]
+            except:
+                pass
+
+            try:
+                # localize the region name (best effort, ignore exceptions)
+                region_display_name = REGION_NAMES[region_display_name]
+            except:
+                pass
+
             if region not in self.region_map:
                 self.region_map[region] = Gtk.ListStore(str, str)
-                self.region_list.append([region, _(region)])
-            self.region_map[region].append([city, _(city_display_name)])
+                self.region_list.append([region, region_display_name])
+            self.region_map[region].append([city, city_display_name])
 
     def set_timezone(self, timezone):
-        if timezone == "Etc/UTC":
+        if timezone == "Etc/UTC" or timezone == "Universal":
             return
 
         self.timezone = timezone

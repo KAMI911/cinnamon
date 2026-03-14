@@ -11,7 +11,7 @@ os.environ['LANGUAGE'] = "en_US.UTF-8"
 gettext.install(DOMAIN, PATH)
 
 prefix = """[Desktop Entry]
-Exec=cinnamon-settings
+Exec=env WEBKIT_DISABLE_COMPOSITING_MODE=1 cinnamon-settings
 Icon=preferences-desktop
 Terminal=false
 Type=Application
@@ -37,7 +37,7 @@ Keywords=Preferences;Settings;
 additionalfiles.generate(DOMAIN, PATH, "files/usr/share/applications/cinnamon-settings-users.desktop", prefix, _("Users and Groups"), _("Add or remove users and groups"), "")
 
 prefix = """[Desktop Entry]
-Exec=dbus-send --print-reply --dest=org.Cinnamon /org/Cinnamon org.Cinnamon.ToggleKeyboard
+Exec=cinnamon-dbus-command ToggleKeyboard
 Icon=cinnamon-virtual-keyboard
 Terminal=false
 Type=Application

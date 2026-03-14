@@ -6,8 +6,9 @@ import gi
 gi.require_version('Gtk', '3.0')
 from gi.repository import Gtk, Gdk
 
-from SettingsWidgets import SidePage
+from bin.SettingsWidgets import SidePage
 from xapp.GSettingsWidgets import *
+import config
 
 
 class Monitor:
@@ -17,6 +18,15 @@ class Monitor:
         self.right = -1
         self.left = -1
 
+    def position_used(self, position):
+        if position == "top":
+            return self.top != -1
+        elif position == "bottom":
+            return self.bottom != -1
+        elif position == "left":
+            return self.left != -1
+        elif position == "right":
+            return self.right != -1
 
 class PanelSettingsPage(SettingsPage):
     def __init__(self, panel_id, settings, position):
@@ -60,7 +70,7 @@ class PanelSettingsPage(SettingsPage):
         section = SettingsSection(_("Customize"))
         self.add(section)
 
-        widget = PanelRange(dimension_text, "org.cinnamon", "panels-height", self.panel_id, _("Smaller"), _("Larger"), mini=20, maxi=60, show_value=True)
+        widget = PanelRange(dimension_text, "org.cinnamon", "panels-height", self.panel_id, _("Smaller"), _("Larger"), mini=20, maxi=60, digits=0, step=1.0, show_value=True)
         widget.set_rounding(0)
         section.add_row(widget)
 
@@ -86,7 +96,7 @@ class PanelSettingsPage(SettingsPage):
             [left_switcher_label, "left"],
             [center_switcher_label, "center"],
             [right_switcher_label, "right"]
-        ];
+        ]
 
         for [zone, label] in (["left", left_switcher_label],
                               ["center", center_switcher_label],
@@ -158,14 +168,15 @@ class Module:
             self.settings = Gio.Settings.new("org.cinnamon")
 
             try:
-                if len(sys.argv) > 2 and sys.argv[1] == "panel":
-                    self.panel_id = sys.argv[2]
+                if config.PARSED_ARGS.panel is not None:
+                    self.panel_id = config.PARSED_ARGS.panel
                 else:
                     self.panel_id = self.settings.get_strv("panels-enabled")[0].split(":")[0]
             except:
                 self.panel_id = ""
 
             self.panels = []
+            self.updating = False
 
             self.previous_button = Gtk.Button(_("Previous panel"))
             self.next_button = Gtk.Button(_("Next panel"))
@@ -279,7 +290,22 @@ class Module:
 
         self.config_stack.set_visible_child(self.current_panel)
 
+    def id_or_monitor_position_used(self, kept_panels, monitor_layout, panel_id, monitor_id, position):
+        for keeper in kept_panels:
+            if keeper.panel_id == panel_id:
+                print(f"cs_panel: Ignoring panel definition with an already-used ID: (ID: {panel_id}, Monitor: {monitor_id}, Position: {position})")
+                return True
+            if monitor_layout[monitor_id].position_used(position):
+                print(f"cs_panel: Ignoring panel definition with an already-used monitor:position: (ID: {panel_id}, Monitor: {monitor_id}, Position: {position})")
+                return True
+        return False
+
     def on_panel_list_changed(self, *args):
+        if self.updating:
+            return
+
+        self.updating = True
+
         if len(self.panels) > 0:
             for panel in self.panels:
                 panel.destroy()
@@ -287,18 +313,29 @@ class Module:
         self.panels = []
         monitor_layout = []
 
-        panels = self.settings.get_strv("panels-enabled")
+        panel_defs = self.settings.get_strv("panels-enabled")
         n_mons = Gdk.Screen.get_default().get_n_monitors()
 
         for i in range(n_mons):
             monitor_layout.append(Monitor())
 
         current_found = False
-        for panel in panels:
-            panel_id, monitor_id, position = panel.split(":")
+        already_defined_panels = []
+        removals = []
+
+        for def_ in panel_defs:
+            panel_id, monitor_id, position = def_.split(":")
             monitor_id = int(monitor_id)
+
+            if monitor_id >= n_mons:
+                print(f"cs_panel: Ignoring panel definition with a monitor out of range: (ID: {panel_id}, Monitor: {monitor_id}, Position: {position})")
+            elif self.id_or_monitor_position_used(already_defined_panels, monitor_layout, panel_id, monitor_id, position):
+                removals.append(def_)
+                continue
+
             panel_page = PanelSettingsPage(panel_id, self.settings, position)
             self.config_stack.add_named(panel_page, panel_id)
+            already_defined_panels.append(panel_page)
 
             # we may already have a current panel id from the command line or if
             # if the panels-enabled key changed since everything was loaded
@@ -320,6 +357,12 @@ class Module:
                 else:
                     monitor_layout[monitor_id].right = panel_page
 
+        if removals:
+            print("Cleaning up conflicting defs in panels-enabled")
+            for def_ in removals:
+                panel_defs.remove(def_)
+            self.settings.set_strv("panels-enabled", panel_defs)
+
         # Index the panels for the next/previous buttons
         for monitor in monitor_layout:
             for panel_page in (monitor.top, monitor.bottom, monitor.left, monitor.right):
@@ -334,6 +377,7 @@ class Module:
             self.add_panel_button.set_sensitive(True)
             self.current_panel = None
             self.panel_id = None
+            self.updating = False
             return
 
         self.config_stack.show()
@@ -368,6 +412,8 @@ class Module:
             current_idx = self.panels.index(self.panel_id)
         except:
             current_idx = 0
+
+        self.updating = False
 
         if self.proxy:
             self.proxy.highlightPanel('(ib)', int(self.panel_id), True)
@@ -578,5 +624,5 @@ class PanelRange(Range, PanelWidgetBackend):
 
     def on_setting_changed(self, *args):
         value = self.get_value()
-        if value != int(self.bind_object.get_value()):
+        if value is not None and value != int(self.bind_object.get_value()):
             self.bind_object.set_value(value)

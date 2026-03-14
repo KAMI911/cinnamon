@@ -7,15 +7,16 @@ const Signals = imports.signals;
 const Lang = imports.lang;
 const St = imports.gi.St;
 const Cinnamon = imports.gi.Cinnamon;
-const Gdk = imports.gi.Gdk;
 
 const Main = imports.ui.main;
 const MessageTray = imports.ui.messageTray;
-const Tweener = imports.ui.tweener;
 const WorkspacesView = imports.ui.workspacesView;
+// ***************
+// This shows all of the windows on the current workspace
+// ***************
 
 // Time for initial animation going into Overview mode
-var ANIMATION_TIME = 0.2;
+var ANIMATION_TIME = 200;
 
 const SwipeScrollDirection = WorkspacesView.SwipeScrollDirection;
 
@@ -134,7 +135,7 @@ Overview.prototype = {
                 let dt = (event.get_time() - this._lastMotionTime) / 1000;
                 let passedHalf = Math.abs(distance / difference) > 0.5;
 
-                /* Switch to the next page if the scroll ammount is more
+                /* Switch to the next page if the scroll amount is more
                    than half the page width or is faster than 25px/s.
                    This number comes from experimental tests. */
                 if (Math.abs(distance) > dt * 25 || passedHalf) {
@@ -165,17 +166,15 @@ Overview.prototype = {
                     this._coverPane.raise_top();
                     this._coverPane.show();
 
-                    Tweener.addTween(this._scrollAdjustment,
-                                     { value: newValue,
-                                       time: ANIMATION_TIME,
-                                       transition: 'easeOutQuad',
-                                       onCompleteScope: this,
-                                       onComplete: function() {
-                                          this._coverPane.hide();
-                                          this.emit('swipe-scroll-end',
-                                                    result);
-                                       }
-                                     });
+                    this._scrollAdjustment.ease({
+                        value: newValue,
+                        duration: ANIMATION_TIME,
+                        mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                        onComplete: () => {
+                            this._coverPane.hide();
+                            this.emit('swipe-scroll-end', result);
+                        }
+                    });
                 }
 
                 global.stage.disconnect(this._capturedEventId);
@@ -229,7 +228,7 @@ Overview.prototype = {
         if (this._shown)
             return;
         // Do this manually instead of using _syncInputMode, to handle failure
-        if (!Main.pushModal(this._group))
+        if (!Main.pushModal(this._group, undefined, undefined, Cinnamon.ActionMode.OVERVIEW))
             return;
         this._modal = true;
         this._shown = true;
@@ -248,12 +247,9 @@ Overview.prototype = {
         // one. Instances of this class share a single CoglTexture behind the
         // scenes which allows us to show the background with different
         // rendering options without duplicating the texture data.
-        this._background = new Clutter.Actor();
+        this._background = Main.createFullScreenBackground();
         this._background.set_position(0, 0);
         this._group.add_actor(this._background);
-
-        let desktopBackground = Meta.BackgroundActor.new_for_screen(global.screen);
-        this._background.add_actor(desktopBackground);
 
         let backgroundShade = new St.Bin({style_class: 'workspace-overview-background-shade'});
         backgroundShade.set_size(global.screen_width, global.screen_height);
@@ -272,44 +268,25 @@ Overview.prototype = {
         this._coverPane.connect('event', () => true);
         this._coverPane.hide();
 
-        // All the the actors in the window group are completely obscured,
-        // hiding the group holding them while the Overview is displayed greatly
-        // increases performance of the Overview especially when there are many
-        // windows visible.
-        //
-        // If we switched to displaying the actors in the Overview rather than
-        // clones of them, this would obviously no longer be necessary.
-        //
         // Disable unredirection while in the overview
-        Meta.disable_unredirect_for_screen(global.screen);
-        global.window_group.hide();
+        Meta.disable_unredirect_for_display(global.display);
         this._group.show();
 
         this.workspacesView = new WorkspacesView.WorkspacesView();
         global.overlay_group.add_actor(this.workspacesView.actor);
         Main.panelManager.disablePanels();
 
-        let animate = Main.wm.settingsState['desktop-effects-workspace'];
-        if (animate) {
-            this._group.opacity = 0;
-            Tweener.addTween(this._group, {
-                opacity: 255,
-                transition: 'easeOutQuad',
-                time: ANIMATION_TIME,
-                onComplete: this._showDone,
-                onCompleteScope: this
-            });
-        }
-
-
         this._coverPane.raise_top();
         this._coverPane.show();
         this.emit('showing');
 
-        if (!animate) {
-            this._group.opacity = 255;
-            this._showDone();
-        }
+        this._group.opacity = 0;
+        this._group.ease({
+            opacity: 255,
+            duration: ANIMATION_TIME * 0.45,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            onComplete: () => this._showDone()
+        });
     },
 
     // showTemporarily:
@@ -377,7 +354,7 @@ Overview.prototype = {
 
         if (this._shown) {
             if (!this._modal) {
-                if (Main.pushModal(this._group))
+                if (Main.pushModal(this._group, undefined, undefined, Cinnamon.ActionMode.OVERVIEW))
                     this._modal = true;
                 else
                     this.hide();
@@ -408,24 +385,17 @@ Overview.prototype = {
 
         this.workspacesView.hide();
 
-        let animate = Main.wm.settingsState['desktop-effects-workspace'];
-        if (animate) {
-            // Make other elements fade out.
-            Tweener.addTween(this._group, {
-                opacity: 0,
-                transition: 'easeOutQuad',
-                time: ANIMATION_TIME,
-                onComplete: this._hideDone,
-                onCompleteScope: this
-            });
-        }
-
         this._coverPane.raise_top();
         this._coverPane.show();
         this.emit('hiding');
 
-        if (!animate)
-            this._hideDone();
+        // Make other elements fade out.
+        this._group.ease({
+            opacity: 0,
+            duration: ANIMATION_TIME,
+            mode: Clutter.AnimationMode.EASE_IN_QUAD,
+            onComplete: () => this._hideDone()
+        });
     },
 
     _showDone: function() {
@@ -451,9 +421,7 @@ Overview.prototype = {
         this._background = null;
 
         // Re-enable unredirection
-        Meta.enable_unredirect_for_screen(global.screen);
-
-        global.window_group.show();
+        Meta.enable_unredirect_for_display(global.display);
 
         this.workspacesView.destroy();
         this.workspacesView = null;

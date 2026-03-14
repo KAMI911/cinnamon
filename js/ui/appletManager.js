@@ -9,9 +9,10 @@ const Main = imports.ui.main;
 const Applet = imports.ui.applet;
 const Extension = imports.ui.extension;
 const ModalDialog = imports.ui.modalDialog;
-const {getModuleByIndex} = imports.misc.fileUtils;
-const {queryCollection, findIndex} = imports.misc.util;
+const Dialog = imports.ui.dialog;
+const {queryCollection} = imports.misc.util;
 const Gettext = imports.gettext;
+const Panel = imports.ui.panel;
 
 // Maps uuid -> importer object (applet directory tree)
 var applets;
@@ -21,16 +22,12 @@ var appletMeta;
 var appletObj = [];
 var appletsLoaded = false;
 
-// An applet can assume a role
-// Instead of hardcoding looking for a particular applet,
-// We let applets announce that they can fill a particular
-// role, using the 'role' metadata entry.
-// For now, just notifications, but could be expanded.
-// question - should multiple applets be able to fill
-// the same role?
+// FIXME: This role stuff is checked in extension.js, why not move checks from here to there?
 var Roles = {
     NOTIFICATIONS: 'notifications',
-    PANEL_LAUNCHER: 'panellauncher'
+    PANEL_LAUNCHER: 'panellauncher',
+    WINDOW_ATTENTION_HANDLER: 'windowattentionhandler',
+    WINDOW_LIST: 'windowlist'
 };
 
 var rawDefinitions;
@@ -39,8 +36,12 @@ var clipboard = [];
 var promises = [];
 
 function initEnabledApplets() {
+   // Load each unique Applet UUID, ignoring duplicates due to multiple instances
     for (let i = 0; i < definitions.length; i++) {
-        promises.push(Extension.loadExtension(definitions[i].uuid, Extension.Type.APPLET))
+        let uuid = definitions[i].uuid;
+        if (definitions.findIndex( (e) => e.uuid === uuid) === i) {
+            promises.push(Extension.loadExtension(uuid, Extension.Type.APPLET));
+        }
     }
     return Promise.all(promises).then(function() {
         Main.cinnamonDBusService.EmitXletsLoadedComplete();
@@ -124,7 +125,6 @@ function prepareExtensionReload(extension) {
             if (!applet) continue;
             global.log(`Reloading applet: ${extension.uuid}/${applet_id}`);
             applet.on_applet_reloaded();
-            return;
         }
     }
 }
@@ -282,7 +282,7 @@ function onEnabledAppletsChanged() {
         if (unChangedApplets.indexOf(oldDefinitions[i].applet_id) === -1) {
             removedApplets.push({changed: false, definition: oldDefinitions[i]});
         } else {
-            let removedIndex = findIndex(removedApplets, function(item) {
+            const removedIndex = removedApplets.findIndex( item => {
                 return item.definition.applet_id === oldDefinitions[i].applet_id;
             });
             if (removedIndex === -1) continue;
@@ -349,17 +349,20 @@ function removeAppletFromPanels(appletDefinition, deleteConfig, changed = false)
 }
 
 function _removeAppletConfigFile(uuid, instanceId) {
-    let config_path = (GLib.get_home_dir() + "/" +
-                               ".cinnamon" + "/" +
-                                 "configs" + "/" +
-                                      uuid + "/" +
-                                instanceId + ".json");
-    let file = Gio.File.new_for_path(config_path);
-    if (file.query_exists(null)) {
-        try {
-            file.delete(null);
-        } catch (e) {
-            global.logError("Problem removing applet config file during cleanup.  UUID is " + uuid + " and filename is " + config_path);
+    let config_paths = [
+        [GLib.get_home_dir(), ".cinnamon", "configs", uuid, instanceId + ".json"].join("/"),
+        [GLib.get_user_config_dir(), "cinnamon", "spices", uuid, instanceId + ".json"].join("/")
+    ];
+
+    for (let i = 0; i < config_paths.length; i++) {
+        const config_path = config_paths[i];
+        let file = Gio.File.new_for_path(config_path);
+        if (file.query_exists(null)) {
+            try {
+                file.delete(null);
+            } catch (e) {
+                global.logError("Problem removing applet config file during cleanup.  UUID is " + uuid + " and filename is " + config_path);
+            }
         }
     }
 }
@@ -416,7 +419,7 @@ function addAppletToPanels(extension, appletDefinition, panel = null, user_actio
 
         return true;
     } catch (e) {
-        extension.unlockRole();
+        extension.unlockRoles();
         Extension.logError('Failed to load applet: ' + appletDefinition.uuid + "/" + appletDefinition.applet_id, extension.uuid, e);
         return false;
     }
@@ -443,14 +446,15 @@ function removeAppletFromInappropriatePanel (extension, appletDefinition) {
 
         global.logWarning((allowedLayout == Applet.AllowedLayout.HORIZONTAL)+", "+[St.Side.LEFT, St.Side.RIGHT].indexOf(appletDefinition.orientation));
 
-        let label_text = "<b>" + extension.meta.name + "</b>\n" +
-                         _("This applet does not support panels of that type. This can cause visual glitches in the panel.") + "\n" +
-                         _("Would you like to continue using it anyway, remove it from the panel, or try to move it to a different panel?");
-        let label = new St.Label({text: label_text});
-        label.clutter_text.set_use_markup(true);
-
         let dialog = new ModalDialog.ModalDialog();
-        dialog.contentLayout.add(label);
+
+        let title = extension.meta.name;
+        let description = _("This applet does not support panels of that type. This can cause visual glitches " +
+                             "in the panel. Would you like to continue using it anyway, remove it from the panel, " +
+                             "or try to move it to a different panel?");
+
+        let content = new Dialog.MessageDialogContent({ title, description });
+        dialog.contentLayout.add_child(content);
 
         dialog.setButtons([
             {
@@ -514,7 +518,7 @@ function removeApplet(appletDefinition) {
 
 function moveApplet(appletDefinition, allowedLayout) {
     let panelId = null;
-    let panels = global.settings.get_strv('panels-enabled');
+    let panels = Panel.getPanelsEnabledList();
     for (let i = 0; i < panels.length; i++) {
         let panelInfo = panels[i].split(':');
         global.logWarning(allowedLayout==Applet.AllowedLayout.HORIZONTAL);
@@ -527,7 +531,7 @@ function moveApplet(appletDefinition, allowedLayout) {
 
     if (panelId == null) {
         removeApplet(appletDefinition);
-        let dialog = new ModalDialog.NotifyDialog(_("A suitable panel could not be found. The applet has been removed instead.") + "\n\n");
+        let dialog = new ModalDialog.NotifyDialog(_("A suitable panel could not be found. The applet has been removed instead."));
         dialog.open();
         return;
     }
@@ -587,14 +591,13 @@ function createApplet(extension, appletDefinition, panel = null) {
 
     let applet;
     try {
-        let module = getModuleByIndex(extension.moduleIndex);
-        if (!module) {
+        if (!extension.module) {
             return null;
         }
         // FIXME: Panel height is now available before an applet is initialized,
         // so we don't need to pass it to the constructor anymore, but would
         // require a compatibility clean-up effort.
-        applet = module.main(extension.meta, orientation, panel.height, applet_id);
+        applet = extension.module.main(extension.meta, orientation, panel.height, applet_id);
     } catch (e) {
         Extension.logError(`Failed to evaluate 'main' function on applet: ${uuid}/${applet_id}`, uuid, e);
         return null;
@@ -804,7 +807,7 @@ function pasteAppletConfiguration(panelId) {
     global.settings.set_strv("enabled-applets", rawDefinitions);
 
     if (skipped) {
-        let dialog = new ModalDialog.NotifyDialog(_("Certain applets do not allow multiple instances or were at their max number of instances so were not copied") + "\n\n");
+        let dialog = new ModalDialog.NotifyDialog(_("Certain applets do not allow multiple instances or were at their max number of instances so were not copied"));
         dialog.open();
     }
 }

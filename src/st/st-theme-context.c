@@ -21,10 +21,12 @@
 
 #include <config.h>
 
+#include "st-border-image.h"
 #include "st-settings.h"
 #include "st-texture-cache.h"
 #include "st-theme.h"
 #include "st-theme-context.h"
+#include "st-theme-node-private.h"
 
 struct _StThemeContext {
   GObject parent;
@@ -56,6 +58,8 @@ enum
   LAST_SIGNAL
 };
 
+static StThemeContext *stage_context = NULL;
+
 static guint signals[LAST_SIGNAL] = { 0, };
 
 G_DEFINE_TYPE (StThemeContext, st_theme_context, G_TYPE_OBJECT);
@@ -66,6 +70,9 @@ static void on_font_name_changed (StSettings     *settings,
                                   StThemeContext *context);
 static void on_icon_theme_changed (StTextureCache *cache,
                                    StThemeContext *context);
+static void on_texture_file_changed (StTextureCache *cache,
+                                     GFile          *file,
+                                     StThemeContext *context);
 
 static void st_theme_context_changed (StThemeContext *context);
 
@@ -88,6 +95,9 @@ st_theme_context_finalize (GObject *object)
                                         context);
   g_signal_handlers_disconnect_by_func (st_texture_cache_get_default (),
                                        (gpointer) on_icon_theme_changed,
+                                       context);
+  g_signal_handlers_disconnect_by_func (st_texture_cache_get_default (),
+                                       (gpointer) on_texture_file_changed,
                                        context);
 
   g_signal_handlers_disconnect_by_func (clutter_get_default_backend (),
@@ -149,6 +159,10 @@ st_theme_context_init (StThemeContext *context)
   g_signal_connect (st_texture_cache_get_default (),
                     "icon-theme-changed",
                     G_CALLBACK (on_icon_theme_changed),
+                    context);
+  g_signal_connect (st_texture_cache_get_default (),
+                    "texture-file-changed",
+                    G_CALLBACK (on_texture_file_changed),
                     context);
 
   g_signal_connect_swapped (clutter_get_default_backend (),
@@ -243,6 +257,7 @@ on_stage_destroy (ClutterStage *stage)
   StThemeContext *context = st_theme_context_get_for_stage (stage);
 
   g_object_set_data (G_OBJECT (stage), "st-theme-context", NULL);
+  stage_context = NULL;
   g_object_unref (context);
 }
 
@@ -289,6 +304,50 @@ on_icon_theme_changed (StTextureCache *cache,
   g_idle_add ((GSourceFunc) changed_idle, context);
 }
 
+static void
+on_texture_file_changed (StTextureCache *cache,
+                         GFile          *file,
+                         StThemeContext *context)
+{
+  GHashTableIter iter;
+  StThemeNode *node;
+  char *changed_path;
+
+  changed_path = g_file_get_path (file);
+  if (changed_path == NULL)
+    return;
+
+  g_hash_table_iter_init (&iter, context->nodes);
+  while (g_hash_table_iter_next (&iter, (gpointer *) &node, NULL))
+    {
+      const char *node_file;
+      StBorderImage *border_image;
+
+      node_file = st_theme_node_get_background_image (node);
+      if (node_file != NULL && strcmp (node_file, changed_path) == 0)
+        {
+          _st_theme_node_free_drawing_state (node);
+          node->alloc_width = 0;
+          node->alloc_height = 0;
+          continue;
+        }
+
+      border_image = st_theme_node_get_border_image (node);
+      if (border_image != NULL)
+        {
+          node_file = st_border_image_get_filename (border_image);
+          if (node_file != NULL && strcmp (node_file, changed_path) == 0)
+            {
+              _st_theme_node_free_drawing_state (node);
+              node->alloc_width = 0;
+              node->alloc_height = 0;
+            }
+        }
+    }
+
+  g_free (changed_path);
+}
+
 /**
  * st_theme_context_get_for_stage:
  * @stage: a #ClutterStage
@@ -310,6 +369,7 @@ st_theme_context_get_for_stage (ClutterStage *stage)
 
   context = st_theme_context_new ();
   g_object_set_data (G_OBJECT (stage), "st-theme-context", context);
+  stage_context = context;
   g_signal_connect (stage, "destroy",
                     G_CALLBACK (on_stage_destroy), NULL);
 
@@ -447,3 +507,19 @@ st_theme_context_intern_node (StThemeContext *context,
   g_hash_table_add (context->nodes, g_object_ref (node));
   return node;
 }
+
+/**
+ * st_theme_context_get_stage_scale:
+ *
+ * Gets the stage's ui scale.
+ *
+ * Return value: the ui scale
+ */
+gint
+st_theme_context_get_scale_for_stage (void)
+{
+  g_return_val_if_fail (stage_context != NULL, 1);
+  // g_printerr ("theme scale: %d\n", stage_context->scale_factor);
+  return stage_context->scale_factor;
+}
+

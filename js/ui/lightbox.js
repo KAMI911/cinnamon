@@ -7,7 +7,6 @@ const St = imports.gi.St;
 const Cinnamon = imports.gi.Cinnamon;
 
 const Params = imports.misc.params;
-const Tweener = imports.ui.tweener;
 
 var VIGNETTE_BRIGHTNESS = 0.5;
 var VIGNETTE_SHARPNESS = 0.7;
@@ -17,25 +16,43 @@ uniform float brightness;\n\
 uniform float vignette_sharpness;\n';
 
 const VIGNETTE_CODE = '\
+const float NOISE_GRANULARITY = 1.0/255.0;\n\
 cogl_color_out.a = cogl_color_in.a;\n\
 cogl_color_out.rgb = vec3(0.0, 0.0, 0.0);\n\
 vec2 position = cogl_tex_coord_in[0].xy - 0.5;\n\
 float t = length(2.0 * position);\n\
 t = clamp(t, 0.0, 1.0);\n\
 float pixel_brightness = mix(1.0, 1.0 - vignette_sharpness, t);\n\
+float pseudo_rand = fract(sin(dot(position.xy, vec2(12.9898,78.233))) * 43758.5453);\n\
+pixel_brightness += mix(-NOISE_GRANULARITY, NOISE_GRANULARITY, pseudo_rand);\n\
 cogl_color_out.a = cogl_color_out.a * (1 - pixel_brightness * brightness);';
 ;
 
-var RadialShaderQuad = GObject.registerClass(
-class RadialShaderQuad extends Cinnamon.GLSLQuad {
+var RadialShaderEffect = GObject.registerClass({
+    Properties: {
+        'brightness': GObject.ParamSpec.float(
+            'brightness', 'brightness', 'brightness',
+            GObject.ParamFlags.READWRITE,
+            0, 1, 1
+        ),
+        'sharpness': GObject.ParamSpec.float(
+            'sharpness', 'sharpness', 'sharpness',
+            GObject.ParamFlags.READWRITE,
+            0, 1, 0
+        )
+    }
+}, class RadialShaderEffect extends Cinnamon.GLSLEffect {
     _init(params) {
+        this._brightness = undefined;
+        this._sharpness = undefined;
+
         super._init(params);
 
         this._brightnessLocation = this.get_uniform_location('brightness');
         this._sharpnessLocation = this.get_uniform_location('vignette_sharpness');
 
         this.brightness = 1.0;
-        this.vignetteSharpness = 0.0;
+        this.sharpness = 0.0;
     }
 
     vfunc_build_pipeline() {
@@ -48,19 +65,25 @@ class RadialShaderQuad extends Cinnamon.GLSLQuad {
     }
 
     set brightness(v) {
+        if (this._brightness == v)
+            return;
         this._brightness = v;
         this.set_uniform_float(this._brightnessLocation,
                                1, [this._brightness]);
+        this.notify('brightness');
     }
 
-    get vignetteSharpness() {
+    get sharpness() {
         return this._sharpness;
     }
 
-    set vignetteSharpness(v) {
+    set sharpness(v) {
+        if (this._sharpness == v)
+            return;
         this._sharpness = v;
         this.set_uniform_float(this._sharpnessLocation,
                                1, [this._sharpness]);
+        this.notify('sharpness');
     }
 });
 
@@ -87,117 +110,133 @@ class RadialShaderQuad extends Cinnamon.GLSLQuad {
  * @container and will track any changes in its size. You can override
  * this by passing an explicit width and height in @params.
  */
-var Lightbox = class Lightbox {
-    constructor(container, params) {
-        params = Params.parse(params, { inhibitEvents: false,
-                                        width: null,
-                                        height: null,
-                                        fadeTime: null,
-                                        radialEffect: false,
-                                      });
+var Lightbox = GObject.registerClass(
+class Lightbox extends St.Bin {
+    _init(container, params) {
+        params = Params.parse(params, {
+            inhibitEvents: false,
+            width: null,
+            height: null,
+            fadeTime: null,
+            radialEffect: false,
+        });
+
+        super._init({
+            reactive: params.inhibitEvents,
+            width: params.width,
+            height: params.height,
+            visible: false,
+        });
 
         this._container = container;
         this._children = container.get_children();
         this._fadeTime = params.fadeTime;
         this._radialEffect = Clutter.feature_available(Clutter.FeatureFlags.SHADERS_GLSL) && params.radialEffect;
+
         if (this._radialEffect)
-            this.actor = new RadialShaderQuad({ reactive: params.inhibitEvents });
+            this.add_effect(new RadialShaderEffect({ name: 'radial' }));
         else
-            this.actor = new St.Bin({ opacity: 0,
-                                      style_class: 'lightbox',
-                                      reactive: params.inhibitEvents });
+            this.set({ opacity: 0, style_class: 'lightbox', important: true });
 
-        container.add_actor(this.actor);
-        this.actor.raise_top();
-        this.actor.hide();
+        container.add_child(this);
+        container.set_child_above_sibling(this, null);
 
-        this.actor.connect('destroy', this._onDestroy.bind(this));
+        this.connect('destroy', this._onDestroy.bind(this));
 
-        if (params.width && params.height) {
-            this.actor.width = params.width;
-            this.actor.height = params.height;
-        } else {
-            this.actor.width = container.width;
-            this.actor.height = container.height;
-            let constraint = new Clutter.BindConstraint({ source: container,
-                                                          coordinate: Clutter.BindCoordinate.ALL });
-            this.actor.add_constraint(constraint);
+        if (!params.width || !params.height) {
+            this.add_constraint(new Clutter.BindConstraint({
+                source: container,
+                coordinate: Clutter.BindCoordinate.ALL
+            }));
         }
 
-        this._actorAddedSignalId = container.connect('actor-added', this._actorAdded.bind(this));
-        this._actorRemovedSignalId = container.connect('actor-removed', this._actorRemoved.bind(this));
+        container.connectObject(
+            'actor-added', this._actorAdded.bind(this),
+            'actor-removed', this._actorRemoved.bind(this), this);
 
         this._highlighted = null;
     }
 
     _actorAdded(container, newChild) {
-        let children = this._container.get_children();
-        let myIndex = children.indexOf(this.actor);
-        let newChildIndex = children.indexOf(newChild);
+        const children = this._container.get_children();
+        const myIndex = children.indexOf(this);
+        const newChildIndex = children.indexOf(newChild);
 
         if (newChildIndex > myIndex) {
             // The child was added above the shade (presumably it was
             // made the new top-most child). Move it below the shade,
             // and add it to this._children as the new topmost actor.
-            newChild.lower(this.actor);
+            this._container.set_child_above_sibling(this, newChild);
             this._children.push(newChild);
-        } else if (newChildIndex == 0) {
+        } else if (newChildIndex === 0) {
             // Bottom of stack
             this._children.unshift(newChild);
         } else {
             // Somewhere else; insert it into the correct spot
-            let prevChild = this._children.indexOf(children[newChildIndex - 1]);
-            if (prevChild != -1) // paranoia
+            const prevChild = this._children.indexOf(children[newChildIndex - 1]);
+            if (prevChild !== -1) // paranoia
                 this._children.splice(prevChild + 1, 0, newChild);
         }
     }
 
-    show() {
+    lightOn() {
+        this.remove_all_transitions();
+
         if (this._radialEffect) {
-            Tweener.addTween(this.actor,
-                             { brightness: VIGNETTE_BRIGHTNESS,
-                               vignetteSharpness: VIGNETTE_SHARPNESS,
-                               time: this._fadeTime,
-                               transition: 'easeOutQuad'
-                             });
+            this.ease_property(
+                '@effects.radial.brightness', VIGNETTE_BRIGHTNESS, {
+                    duration: this._fadeTime / 1000,
+                    mode: Clutter.AnimationMode.EASE_OUT_QUAD
+                });
+            this.ease_property(
+                '@effects.radial.sharpness', VIGNETTE_SHARPNESS, {
+                    duration: this._fadeTime / 1000,
+                    mode: Clutter.AnimationMode.EASE_OUT_QUAD
+                });
         } else {
-            this.actor.opacity = 0;
-            Tweener.addTween(this.actor,
-                             { opacity: 255,
-                               time: this._fadeTime,
-                               transition: 'easeOutQuad',
-                             });
+            this.opacity = 0;
+            this.ease({
+                opacity: 255,
+                duration: this._fadeTime / 1000,
+                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            });
         }
-        this.actor.show();
+        this.show();
     }
 
-    hide() {
+    lightOff() {
+        this.remove_all_transitions();
+
+        const onComplete = () => this.hide();
+
         if (this._radialEffect) {
-            Tweener.addTween(this.actor,
-                             { brightness: 1.0,
-                               vignetteSharpness: 0.0,
-                               opacity: 0,
-                               time: this._fadeTime,
-                               transition: 'easeOutQuad',
-                             });
+            this.ease_property(
+                '@effects.radial.brightness', 1.0, {
+                    duration: this._fadeTime / 1000,
+                    mode: Clutter.AnimationMode.EASE_OUT_QUAD
+                });
+            this.ease_property(
+                '@effects.radial.sharpness', 0.0, {
+                    duration: this._fadeTime / 1000,
+                    mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                    onComplete
+                });
         } else {
-            Tweener.addTween(this.actor,
-                             { opacity: 0,
-                               time: this._fadeTime,
-                               transition: 'easeOutQuad',
-                               onComplete: () => {
-                                   this.actor.hide();
-                               }
-                             });
+            this.ease({
+                opacity: 0,
+                duration: this._fadeTime / 1000,
+                mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                onComplete
+            });
         }
     }
 
     _actorRemoved(container, child) {
-        let index = this._children.indexOf(child);
-        if (index != -1) // paranoia
+        const index = this._children.indexOf(child);
+        if (index !== -1) // paranoia
             this._children.splice(index, 1);
 
-        if (child == this._highlighted)
+        if (child === this._highlighted)
             this._highlighted = null;
     }
 
@@ -210,7 +249,7 @@ var Lightbox = class Lightbox {
      * argument, all actors will be unhighlighted.
      */
     highlight(window) {
-        if (this._highlighted == window)
+        if (this._highlighted === window)
             return;
 
         // Walk this._children raising and lowering actors as needed.
@@ -219,26 +258,17 @@ var Lightbox = class Lightbox {
         // case we may need to indicate some *other* actor as the new
         // sibling of the to-be-lowered one.
 
-        let below = this.actor;
+        let below = this;
         for (let i = this._children.length - 1; i >= 0; i--) {
-            if (this._children[i] == window)
-                this._children[i].raise_top();
-            else if (this._children[i] == this._highlighted)
-                this._children[i].lower(below);
+            if (this._children[i] === window)
+                this._container.set_child_above_sibling(this._children[i], null);
+            else if (this._children[i] === this._highlighted)
+                this._container.set_child_below_sibling(this._children[i], below);
             else
                 below = this._children[i];
         }
 
         this._highlighted = window;
-    }
-
-    /**
-     * destroy:
-     *
-     * Destroys the lightbox.
-     */
-    destroy() {
-        this.actor.destroy();
     }
 
     /**
@@ -248,9 +278,6 @@ var Lightbox = class Lightbox {
      * by destroying its container or by explicitly calling this.destroy().
      */
     _onDestroy() {
-        this._container.disconnect(this._actorAddedSignalId);
-        this._container.disconnect(this._actorRemovedSignalId);
-
         this.highlight(null);
     }
-};
+});

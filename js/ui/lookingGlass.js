@@ -24,7 +24,6 @@ var commandHeader = 'const Clutter = imports.gi.Clutter; ' +
                     'const Meta = imports.gi.Meta; ' +
                     'const Cinnamon = imports.gi.Cinnamon; ' +
                     'const Main = imports.ui.main; ' +
-                    'const Tweener = imports.ui.tweener; ' +
                     /* Utility functions...we should probably be able to use these
                      * in Cinnamon core code too. */
                     'const stage = global.stage; ' +
@@ -122,8 +121,12 @@ function getObjKeysInfo(obj) {
 
     return Array.from(keys).map((k) => {
         if (!KEY_BLACKLIST.includes(k)) {
-            let [t, v] = getObjInfo(obj[k]);
-            return { name: k.toString(), type: t, value: v, shortValue: "" };
+            try {
+                let [t, v] = getObjInfo(obj[k]);
+                return { name: k.toString(), type: t, value: v, shortValue: "" };
+            } catch (e) {
+                return { name: k.toString(), type: '[inacessible]', value: '[inacessible]', shortValue: "" }; 
+            }
         } else {
             return { name: k.toString(), type: '[inacessible]', value: '[inacessible]', shortValue: "" }; 
         }
@@ -212,7 +215,7 @@ class WindowList {
             this.latestWindowList.push(lgInfo);
         }
 
-        // Make sure the list changed before notifying listeneres
+        // Make sure the list changed before notifying listeners
         let changed = oldWindowList.length != this.latestWindowList.length;
         if (!changed) {
             for (let i = 0; i < oldWindowList.length; i++) {
@@ -229,44 +232,64 @@ class WindowList {
 
 function addBorderPaintHook(actor) {
     let signalId = actor.connect_after('paint',
-        function () {
-            let color = new Cogl.Color();
-            color.init_from_4ub(0xff, 0, 0, 0xc4);
-            Cogl.set_source_color(color);
+        function (actor, paint_context) {
+            let framebuffer = paint_context.get_framebuffer();
+            let coglContext = framebuffer.get_context();
 
-            let geom = actor.get_allocation_geometry();
+            if (!this._pipeline) {
+                let color = new Cogl.Color();
+                color.init_from_4ub(0xff, 0, 0, 0xc4);
+
+                this._pipeline = new Cogl.Pipeline(coglContext);
+                this._pipeline.set_color(color);
+            }
+
+            let alloc = actor.get_allocation_box();
             let width = 2;
 
             // clockwise order
-            Cogl.rectangle(0, 0, geom.width, width);
-            Cogl.rectangle(geom.width - width, width,
-                           geom.width, geom.height);
-            Cogl.rectangle(0, geom.height,
-                           geom.width - width, geom.height - width);
-            Cogl.rectangle(0, geom.height - width,
-                           width, width);
+            framebuffer.draw_rectangle(this._pipeline,
+                0, 0, alloc.get_width(), width);
+            framebuffer.draw_rectangle(this._pipeline,
+                alloc.get_width() - width, width,
+                alloc.get_width(), alloc.get_height());
+            framebuffer.draw_rectangle(this._pipeline,
+                0, alloc.get_height(),
+                alloc.get_width() - width, alloc.get_height() - width);
+            framebuffer.draw_rectangle(this._pipeline,
+                0, alloc.get_height() - width,
+                width, width);
         });
 
     actor.queue_redraw();
     return signalId;
 }
 
-class Inspector {
-    constructor() {
-        let container = new Cinnamon.GenericContainer({ width: 0,
-                                                        height: 0 });
-        container.connect('allocate', (...args) => { this._allocate(...args) });
-        Main.uiGroup.add_actor(container);
+var Inspector = GObject.registerClass({
+    Signals: {
+        'closed': {},
+        'target': { param_types: [Clutter.Actor.$gtype, GObject.TYPE_DOUBLE, GObject.TYPE_DOUBLE]},
+    },
+}, class Inspector extends Clutter.Actor {
+    _init() {
+        super._init({
+            width: 0,
+            height: 0,
+        });
 
-        let eventHandler = new St.BoxLayout({ name: 'LookingGlassDialog',
-                                              vertical: true,
-                                              reactive: true });
+        Main.uiGroup.add_actor(this);
+
+        let eventHandler = new St.BoxLayout({
+            name: 'LookingGlassDialog',
+            vertical: true,
+            reactive: true,
+        });
         this._eventHandler = eventHandler;
-        Main.pushModal(this._eventHandler);
-        container.add_actor(eventHandler);
-        this._displayText = new St.Label();
+        Main.pushModal(this._eventHandler, undefined, undefined, Cinnamon.ActionMode.LOOKING_GLASS);
+        this.add_child(eventHandler);
+        this._displayText = new St.Label({ style: 'text-align: center;' });
         eventHandler.add(this._displayText, { expand: true });
-        this._passThroughText = new St.Label({style: 'text-align: center;'});
+        this._passThroughText = new St.Label({ style: 'text-align: center;' });
         eventHandler.add(this._passThroughText, { expand: true });
 
         this._borderPaintTarget = null;
@@ -298,11 +321,11 @@ class Inspector {
                                                             event.get_key_symbol() === Clutter.KEY_Pause)) {
             this.passThroughEvents = !this.passThroughEvents;
             this._updatePassthroughText();
-            return true;
+            return Clutter.EVENT_STOP;
         }
 
         if (this.passThroughEvents)
-            return false;
+            return Clutter.EVENT_PROPAGATE;
 
         switch (event.type()) {
             case Clutter.EventType.KEY_PRESS:
@@ -314,13 +337,15 @@ class Inspector {
             case Clutter.EventType.MOTION:
                 return this._onMotionEvent(actor, event);
             default:
-                return true;
+                return Clutter.EVENT_STOP;
         }
     }
 
-    _allocate(actor, box, flags) {
+    vfunc_allocate(box, flags) {
         if (!this._eventHandler)
             return;
+
+        this.set_allocation(box, flags);
 
         let primary = Main.layoutManager.primaryMonitor;
 
@@ -352,7 +377,7 @@ class Inspector {
     _onKeyPressEvent(actor, event) {
         if (event.get_key_symbol() === Clutter.KEY_Escape)
             this._close();
-        return true;
+        return Clutter.EVENT_STOP;
     }
 
     _onButtonPressEvent(actor, event) {
@@ -361,7 +386,7 @@ class Inspector {
             this.emit('target', this._target, stageX, stageY);
         }
         this._close();
-        return true;
+        return Clutter.EVENT_STOP;
     }
 
     _onScrollEvent(actor, event) {
@@ -395,12 +420,12 @@ class Inspector {
             default:
                 break;
         }
-        return true;
+        return Clutter.EVENT_STOP;
     }
 
     _onMotionEvent(actor, event) {
         this._update(event);
-        return true;
+        return Clutter.EVENT_STOP;
     }
 
     _update(event) {
@@ -413,9 +438,9 @@ class Inspector {
             this._target = target;
         this._pointerTarget = target;
 
-        let position = '[inspect x: ' + stageX + ' y: ' + stageY + ']';
+        let position = `[  x: ${stageX.toFixed(6)} y: ${stageY.toFixed(6)}  ]\n`;
         this._displayText.text = '';
-        this._displayText.text = position + ' ' + this._target;
+        this._displayText.text = position + this._target;
 
         if (this._borderPaintTarget != this._target) {
             if (this._borderPaintTarget != null)
@@ -424,11 +449,9 @@ class Inspector {
             this._borderPaintId = addBorderPaintHook(this._target);
         }
     }
-};
-Signals.addSignalMethods(Inspector.prototype);
+});
 
-
-const dbusIFace =
+const melangeIFace =
     '<node> \
         <interface name="org.Cinnamon.Melange"> \
             <method name="show" /> \
@@ -436,7 +459,6 @@ const dbusIFace =
             <method name="getVisible"> \
                 <arg type="b" direction="out" name="visible"/> \
             </method> \
-            <property name="_open" type="b" access="read" /> \
         </interface> \
      </node>';
 
@@ -491,8 +513,6 @@ const lgIFace =
         </interface> \
     </node>';
 
-const proxy = Gio.DBusProxy.makeProxyWrapper(dbusIFace);
-
 var Melange = class {
     constructor() {
         this.proxy = null;
@@ -512,6 +532,7 @@ var Melange = class {
         this._dbusImpl.export(Gio.DBus.session, '/org/Cinnamon/LookingGlass');
 
         Gio.DBus.session.own_name('org.Cinnamon.LookingGlass', Gio.BusNameOwnerFlags.REPLACE, null, null);
+        this.ensureProxy();
     }
 
     _update_keybinding() {
@@ -520,18 +541,35 @@ var Melange = class {
     }
 
     ensureProxy() {
-        if (!this.proxy)
-            this.proxy = new proxy(Gio.DBus.session, 'org.Cinnamon.Melange', '/org/Cinnamon/Melange');
+        let nodeInfo = Gio.DBusNodeInfo.new_for_xml(melangeIFace);
+
+        Gio.DBusProxy.new(
+              Gio.DBus.session,
+              Gio.DBusProxyFlags.DO_NOT_AUTO_START_AT_CONSTRUCTION,
+              nodeInfo.lookup_interface("org.Cinnamon.Melange"),
+              "org.Cinnamon.Melange",
+              "/org/Cinnamon/Melange",
+              "org.Cinnamon.Melange",
+              null,
+              this._onProxyReady.bind(this)
+        );
+    }
+
+    _onProxyReady(object, res) {
+        try {
+            this.proxy = Gio.DBusProxy.new_finish(res);
+        } catch (e) {
+            log('error creating org.Cinnamon.Melange proxy: %s'.format(e.message));
+            return;
+        }
     }
 
     open() {
-        this.ensureProxy()
         this.proxy.showRemote();
         this.updateVisible();
     }
 
     close() {
-        this.ensureProxy()
         this.proxy.hideRemote();
         this.updateVisible();
     }
@@ -645,7 +683,7 @@ var Melange = class {
         try {
             let inspector = new Inspector();
             inspector.connect('target', (i, target, stageX, stageY) => {
-                let name = '<inspect x:' + stageX + ' y:' + stageY + '>';
+                let name = `<x:${stageX.toFixed(6)} y:${stageY.toFixed(6)}>`;
                 this._pushResult(name, target, "Inspected actor");
             });
             inspector.connect('closed', () => { this.emitInspectorDone() });

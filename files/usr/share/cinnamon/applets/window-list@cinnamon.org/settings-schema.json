@@ -38,26 +38,42 @@
     "type": "section",
     "description": "Display"
   },
-  "buttons-use-entire-space": {
-      "type": "switch",
-      "default": false,
-      "description": "Window buttons can have different sizes and use the entire space available"
-  },
   "panel-show-label": {
       "type": "switch",
       "default": true,
       "description": "Show window names in the panel"
   },
-  "window-preview": {
+  "button-width": {
+        "type": "spinbutton",
+        "default" : 150,
+        "min" : 0,
+        "max" : 1000,
+        "step" : 5,
+        "units" : "pixels",
+        "description" : "Window button width in the panel",
+        "dependency": "panel-show-label"
+  },
+  "buttons-use-entire-space": {
       "type": "switch",
-      "default": true,
-      "description": "Show window thumbnails on hover"
+      "default": false,
+      "description": "Window buttons can have different sizes and use the entire space available",
+      "dependency": "panel-show-label"
+  },
+  "window-hover": {
+      "type": "radiogroup",
+      "default": "thumbnail",
+      "description": "Choose what to show when hovering over a window button",
+      "options": {
+          "Nothing": "nothing",
+          "Title": "title",
+          "Thumbnail": "thumbnail"
+      }
   },
   "window-preview-show-label": {
       "type": "switch",
       "default": true,
       "description": "Show title above thumbnail",
-      "dependency": "window-preview"
+      "dependency": "window-hover=thumbnail"
   },
   "window-preview-scale": {
       "type": "radiogroup",
@@ -69,7 +85,12 @@
           "Large": 1.25,
           "Largest": 1.5
       },
-      "dependency": "window-preview"
+      "dependency": "window-hover=thumbnail"
+  },
+  "enable-notifications": {
+      "type": "switch",
+      "default": true,
+      "description": "Show notification badges"
   },
   "last-window-order": {
       "type": "generic",

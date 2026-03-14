@@ -6,11 +6,14 @@ import shlex
 import os
 import re
 import threading
+import shutil
 from json import loads
 
-from SettingsWidgets import SidePage
-from xapp.GSettingsWidgets import *
+from gi.repository import GdkPixbuf
 
+from bin.SettingsWidgets import SidePage
+from bin import util
+from xapp.GSettingsWidgets import *
 
 def killProcess(process):
     process.kill()
@@ -38,18 +41,12 @@ def getGraphicsInfos():
     count = 0
     envpath = os.environ["PATH"]
     os.environ["PATH"] = envpath + ":/usr/local/sbin:/usr/sbin:/sbin"
-    for card in getProcessOut(("lspci")):
-        if not "VGA" in card:
-            continue
-        cardId = card.split()[0]
-        cardName = None
-        for line in getProcessOut(("lspci", "-v", "-s", cardId)):
-            if line.startswith(cardId):
-                cardName = (line.split(":")[2].split("(rev")[0].strip())
-
-        if cardName:
-            cards[count] = (cardName)
-            count += 1
+    for card in getProcessOut("lspci"):
+        for prefix in ["VGA compatible controller:", "3D controller:", "Display controller:"]:
+            if prefix in card:
+                cardName = card.split(prefix)[1].split("(rev")[0].strip()
+                cards[count] = cardName
+                count += 1
     os.environ["PATH"] = envpath
     return cards
 
@@ -111,23 +108,16 @@ def createSystemInfos():
         args = shlex.split("awk -F \"=\" '/GRUB_TITLE/ {print $2}' /etc/linuxmint/info")
         title = subprocess.check_output(args).decode('utf-8').rstrip("\n")
         infos.append((_("Operating System"), title))
-    elif os.path.exists("/etc/arch-release"):
-        contents = open("/etc/arch-release", 'r').readline().split()
-        title = ' '.join(contents[:2]) or "Arch Linux"
-        infos.append((_("Operating System"), title))
-    elif os.path.exists("/etc/manjaro-release"):
-        contents = open("/etc/manjaro-release", 'r').readline().split()
-        title = ' '.join(contents[:2]) or "Manjaro Linux"
-        infos.append((_("Operating System"), title))
-    else:
-        import distro
-        s = '%s (%s)' % (' '.join(distro.linux_distribution()), arch)
-        # Normalize spacing in distribution name
-        s = re.sub(r'\s{2,}', ' ', s)
-        infos.append((_("Operating System"), s))
+    elif os.path.exists("/etc/os-release"):
+          with open("/etc/os-release", 'r') as os_release_file:
+             for line in os_release_file:
+                 if line.startswith("PRETTY_NAME="):
+                    title = line.strip()[len("PRETTY_NAME="):].strip('"')
+                    infos.append((_("Operating System"), title))
+                    break # No need to continue reading the file once we have found PRETTY_NAME
     if 'CINNAMON_VERSION' in os.environ:
         infos.append((_("Cinnamon Version"), os.environ['CINNAMON_VERSION']))
-    infos.append((_("Linux Kernel"), platform.release()))
+    infos.append((_("Kernel"), platform.release()))
     infos.append((_("Processor"), processorName))
     if memunit == "kB":
         infos.append((_("Memory"), '%.1f %s' % ((float(memsize)/(1024*1024)), _("GiB"))))
@@ -135,7 +125,7 @@ def createSystemInfos():
         infos.append((_("Memory"), procInfos['mem_total']))
 
     diskSize, multipleDisks = getDiskSize()
-    if (multipleDisks):
+    if multipleDisks:
         diskText = _("Hard Drives")
     else:
         diskText = _("Hard Drive")
@@ -147,6 +137,13 @@ def createSystemInfos():
     for card in cards:
         infos.append((_("Graphics Card"), cards[card]))
 
+    display_server_name = _("X11")
+
+    if util.get_session_type() == "wayland":
+        display_server_name = _("Wayland")
+
+    infos.append((_("Display Server"), display_server_name))
+
     return infos
 
 
@@ -156,7 +153,7 @@ class Module:
     comment = _("Display system information")
 
     def __init__(self, content_box):
-        keywords = _("system, information, details, graphic, sound, kernel, version")
+        keywords = _("system, information, details, graphic, sound, kernel, version, about")
         sidePage = SidePage(_("System Info"), "cs-details", keywords, content_box, module=self)
         self.sidePage = sidePage
 
@@ -164,12 +161,27 @@ class Module:
         if not self.loaded:
             print("Loading Info module")
 
-            infos = createSystemInfos()
-
             page = SettingsPage()
+            page.set_spacing(24)
             self.sidePage.add_widget(page)
 
-            settings = page.add_section(_("System info"))
+            schema = Gio.Settings(schema="org.cinnamon")
+            systemIcon = schema.get_string("system-icon")
+            if systemIcon != "":
+                try:
+                    if "/" in systemIcon:
+                        pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(systemIcon, -1, 100, True)
+                        systemIcon = Gtk.Image.new_from_pixbuf(pixbuf)
+                    else:
+                        systemIcon = Gtk.Image.new_from_icon_name(systemIcon, Gtk.IconSize.DIALOG)
+                        systemIcon.set_pixel_size(100)
+                    page.add(systemIcon)
+                except GLib.GError:
+                    pass
+
+            infos = createSystemInfos()
+
+            settings = page.add_section()
 
             for (key, value) in infos:
                 widget = SettingsWidget()
@@ -183,7 +195,7 @@ class Module:
                 widget.pack_end(labelValue, False, False, 0)
                 settings.add_row(widget)
 
-            if os.path.exists("/usr/bin/upload-system-info"):
+            if shutil.which("upload-system-info"):
                 widget = SettingsWidget()
 
                 spinner = Gtk.Spinner(visible=True)
@@ -191,18 +203,54 @@ class Module:
                                     tooltip_text=_("No personal information included"),
                                     always_show_image=True,
                                     image=spinner)
-                button.connect("clicked", self.on_button_clicked, spinner)
+                button.connect("clicked", self.on_upload_button_clicked, spinner)
                 widget.pack_start(button, True, True, 0)
                 settings.add_row(widget)
 
-    def on_button_clicked(self, button, spinner):
+            if shutil.which("inxi"):
+                widget = SettingsWidget()
 
+                spinner = Gtk.Spinner(visible=True)
+                button = Gtk.Button(label=_("Copy to clipboard"),
+                                    always_show_image=True,
+                                    image=spinner)
+                button.connect("clicked", self.on_copy_clipboard_button_clicked, spinner)
+                widget.pack_start(button, True, True, 0)
+                settings.add_row(widget)
+
+    def on_copy_clipboard_button_clicked(self, button, spinner):
+            spinner.start()
+
+            def finished_inxi(output):
+                spinner.stop()
+
+                if output is None:
+                    return
+
+                clipboard = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+                clipboard.set_text(output.decode("utf-8"), -1)
+
+            def _run_inxi(spinner):
+                inxiOutput = None
+
+                try:
+                    inxiOutput = subprocess.run(['inxi', '-FJxxxrzc0'], check=True, stdout=subprocess.PIPE).stdout
+                except Exception as e:
+                    print("An error occurred while copying the system information to clipboard")
+                    print(e)
+
+                GLib.idle_add(finished_inxi, inxiOutput)
+
+            inxi_thread = threading.Thread(target=_run_inxi, args=(spinner,))
+            inxi_thread.start()
+
+    def on_upload_button_clicked(self, button, spinner):
         try:
             subproc = Gio.Subprocess.new(["upload-system-info"], Gio.SubprocessFlags.NONE)
             subproc.wait_check_async(None, self.on_subprocess_complete, spinner)
             spinner.start()
         except GLib.Error as e:
-            print("upload-system-info failed to run: %s" % e.message)
+            print(f"upload-system-info failed to run: {e.message}")
 
     def on_subprocess_complete(self, subproc, result, spinner):
         spinner.stop()
@@ -210,4 +258,4 @@ class Module:
         try:
             success = subproc.wait_check_finish(result)
         except GLib.Error as e:
-            print("upload-system-info failed: %s" % e.message)
+            print(f"upload-system-info failed: {e.message}")

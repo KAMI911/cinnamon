@@ -29,8 +29,26 @@
       </description>
     </key>
 
+    <key name="enable-nm-agent" type="b">
+      <default>true</default>
+      <summary>Whether to enable the NetworkManager agent</summary>
+      <description></description>
+    </key>
+
+    <key name="enable-polkit-agent" type="b">
+      <default>true</default>
+      <summary>Whether to enable the Polkit agent</summary>
+      <description></description>
+    </key>
+
+    <key name="enable-ssh-agent" type="b">
+      <default>true</default>
+      <summary>Whether to enable the SSH agent</summary>
+      <description></description>
+    </key>
+
     <key name="enabled-applets" type="as">
-      <default>['panel1:left:0:menu@cinnamon.org', 'panel1:left:1:show-desktop@cinnamon.org', 'panel1:left:2:grouped-window-list@cinnamon.org', 'panel1:right:0:systray@cinnamon.org', 'panel1:right:1:xapp-status@cinnamon.org', 'panel1:right:2:notifications@cinnamon.org', 'panel1:right:3:printers@cinnamon.org', 'panel1:right:4:removable-drives@cinnamon.org', 'panel1:right:5:keyboard@cinnamon.org', 'panel1:right:6:favorites@cinnamon.org', 'panel1:right:7:network@cinnamon.org', 'panel1:right:8:sound@cinnamon.org', 'panel1:right:9:power@cinnamon.org', 'panel1:right:10:calendar@cinnamon.org']</default>
+      <default>['panel1:left:0:menu@cinnamon.org', 'panel1:left:1:separator@cinnamon.org', 'panel1:left:2:grouped-window-list@cinnamon.org', 'panel1:right:0:systray@cinnamon.org', 'panel1:right:1:xapp-status@cinnamon.org', 'panel1:right:2:notifications@cinnamon.org', 'panel1:right:3:printers@cinnamon.org', 'panel1:right:4:removable-drives@cinnamon.org', 'panel1:right:5:keyboard@cinnamon.org', 'panel1:right:6:favorites@cinnamon.org', 'panel1:right:7:network@cinnamon.org', 'panel1:right:8:sound@cinnamon.org', 'panel1:right:9:power@cinnamon.org', 'panel1:right:10:calendar@cinnamon.org', 'panel1:right:11:cornerbar@cinnamon.org']</default>
       <summary>Uuids of applets to enable</summary>
       <description>
         Cinnamon applets have a uuid property; this key lists applets
@@ -94,7 +112,10 @@
       <summary>The interval between each possible grid position when desklets "snap"</summary>
       <description>If desklet-snap is enabled, the possible positions of desklets will be all integer multiples of the value of "desklet-snap-size"</description>
     </key>
-
+    <key name="lock-desklets" type="b">
+      <default>false</default>
+      <summary> Locks the current position of all desklets and prevents dragging</summary>
+    </key>
     <key name="panels-enabled" type="as">
       <default>['1:0:bottom']</default>
       <summary>List of panels used</summary>
@@ -182,9 +203,17 @@
 
     <key name="desktop-effects-workspace" type="b">
       <default>true</default>
-      <summary>Enable desktop effects on the workspace</summary>
+      <summary>Enable desktop effects in the Cinnamon ui</summary>
       <description>
         This affects switching workspaces, expo and scale.
+      </description>
+    </key>
+
+    <key name="desktop-effects" type="b">
+      <default>true</default>
+      <summary>Enable desktop effects</summary>
+      <description>
+        Whether to enable desktop effects and window animations.
       </description>
     </key>
 
@@ -200,7 +229,7 @@
       <default>"traditional"</default>
       <summary>Effect used when mapping windows</summary>
       <description>
-       An effect: traditional, fly, move, none
+       An effect: traditional, fly, fade, none
       </description>
     </key>
 
@@ -208,14 +237,7 @@
       <default>"traditional"</default>
       <summary>Effect used when minimizing windows</summary>
       <description>
-       An effect: traditional, fly, none
-      </description>
-    </key>
-
-    <key type="b" name="desktop-effects-maximize">
-      <default>false</default>
-      <summary>Whether to show an animation when maximizing windows</summary>
-      <description>
+       An effect: traditional, fly, fade, none
       </description>
     </key>
 
@@ -224,6 +246,12 @@
       <summary>Whether to show an animation when unmaximizing/tiling/snapping windows</summary>
       <description>
       </description>
+    </key>
+
+    <key type="i" name="window-effect-speed">
+      <default>1</default>
+      <range min="0" max="2"/>
+      <summary>Speed multiplier for window-effects</summary>
     </key>
 
     <key type="b" name="startup-animation">
@@ -275,6 +303,14 @@
       <description>Properties of hotcorners, in the form functionality:hover-enabled:hover-delay. The order in which properties are displayed is top left, top right, bottom left, bottom right.</description>
     </key>
 
+    <key name="hotcorner-fullscreen" type="b"> 
+      <default>false</default>
+      <summary>Enable hotcorners in fullscreen</summary>
+      <description>
+        Enable hotcorners in fullscreen
+      </description>
+    </key>
+
     <key name="panel-launchers" type="as">
       <default>["DEPRECATED"]</default>
       <summary>Obsolete - unused</summary>
@@ -293,7 +329,7 @@
     </key>
 
     <key name="favorite-apps" type="as">
-      <default>[ 'firefox.desktop', 'mintinstall.desktop', 'cinnamon-settings.desktop', 'hexchat.desktop', 'org.gnome.Terminal.desktop', 'nemo.desktop' ]</default>
+      <default>[ 'org.gnome.Calculator.desktop', 'org.gnome.Calendar.desktop', 'org.x.editor.desktop', 'mintinstall.desktop', 'cinnamon-settings.desktop' ]</default>
       <summary>List of desktop file IDs for favorite applications</summary>
       <description>
         The applications corresponding to these identifiers
@@ -322,6 +358,14 @@
       <summary>Display the Expo view as a grid</summary>
       <description>
         When enabled the Expo view will be displayed as a grid.
+      </description>
+    </key>
+
+    <key name="workspace-expo-primary-monitor" type="b">
+      <default>true</default>
+      <summary>Show the Expo view on the primary monitor</summary>
+      <description>
+        When enabled the Expo view will be displayed on the primary monitor rather than the current monitor.
       </description>
     </key>
 
@@ -379,8 +423,13 @@
       <summary>Enforce displaying the alt-tab switcher on the primary monitor instead of the active one</summary>
     </key>
 
+    <key type="b" name="alttab-switcher-show-current-monitor">
+      <default>false</default>
+      <summary>Show windows from current monitor only</summary>
+    </key>
+
     <key type="b" name="alttab-minimized-aware">
-    <default>false</default>
+    <default>true</default>
       <summary>Move minimized windows to the end of the appSwitcher</summary>
     </key>
 
@@ -395,12 +444,14 @@
       <summary>Show all windows from all workspaces</summary>
     </key>
 
+    <key type="b" name="alttab-switcher-warp-mouse-pointer">
+      <default>false</default>
+      <summary>Warp mouse pointer to the new focused window</summary>
+    </key>
+
     <key name="bring-windows-to-current-workspace" type="b">
       <default>false</default>
-      <summary>Brings windows requiring attention to the current workspace</summary>
-      <description>
-        When enabled, if a window requires attention, it is brought to the current workspace.
-      </description>
+      <summary>not used - lives in org.cinnamon.muffin now</summary>
     </key>
 
     <key name="prevent-focus-stealing" type="b">
@@ -421,17 +472,6 @@
       </description>
     </key>
 
-    <key type="b" name="enable-edge-flip">
-      <default>false</default>
-      <summary>Whether edge flip is enabled</summary>
-    </key>
-
-    <key type="i" name="edge-flip-delay">
-      <default>1000</default>
-      <summary>Duration of the delay before switching the workspace</summary>
-      <description>Duration of the delay (in milliseconds)</description>
-    </key>
-
     <key type="b" name="cinnamon-settings-advanced">
       <default>false</default>
       <summary>Whether advanced mode is enabled in cinnamon-settings</summary>
@@ -448,13 +488,9 @@
       <description>Aliases for use in the Alt-F2 dialog. This is a list of strings of the form a:b, where an instance of "a" is to be replaced with "b". Replacement is only performed on the first word.</description>
     </key>
 
-    <key type="s" name="show-media-keys-osd">
-      <default>"medium"</default>
-      <summary>Whether the media keys osd is disabled or its relative display size</summary>
-      <description>
-      Allows setting of the default size of the media keys osd or disables it completely.
-      Possible values are "small", "medium", "large", or "disabled".
-      </description>
+    <key type="b" name="show-media-keys-osd">
+      <default>true</default>
+      <summary>Whether or not to show the media keys osd</summary>
     </key>
 
     <key name="startup-icon-name" type="s">
@@ -470,7 +506,40 @@
       <summary>If true, Cinnamon will no longer attempt to be the session notification handler.</summary>
     </key>
 
-    <child name="theme" schema="org.cinnamon.theme"/>   
+    <key type="s" name="system-icon">
+      <default>""</default>
+      <summary>The logo to use in the system info settings</summary>
+      <description>
+        An icon name or absolute path to an icon, which will be used for the system icon in the "System Info" settings app.
+        Disabled if no value is set.
+      </description>
+    </key>
+
+    <key type="b" name="center-warped-pointer">
+      <default>true</default>
+      <summary>Center the pointer on the new monitor</summary>
+      <description>If true, the pointer will be set to the center of the new monitor when using pointer next/previous shortcuts.</description>
+    </key>
+
+    <key type="b" name="internal-screensaver-enabled">
+      <default>true</default>
+      <summary>Use internal screensaver implementation. Requires cinnamon restart if changed.</summary>
+      <description>If true, use Cinnamon's internal screensaver for locking instead of the external cinnamon-screensaver daemon.</description>
+    </key>
+
+    <key type="b" name="session-locked-state">
+      <default>false</default>
+      <summary>Whether the session is currently locked</summary>
+      <description>Persists the screensaver locked state so it can be restored after a Cinnamon restart. This key is managed internally and should not be modified manually.</description>
+    </key>
+
+    <key type="b" name="debug-screensaver">
+      <default>false</default>
+      <summary>Enable screensaver debug logging</summary>
+      <description>If true, enables verbose debug logging for the screensaver, unlock dialog, and backup-locker.</description>
+    </key>
+
+    <child name="theme" schema="org.cinnamon.theme"/>
     <child name="recorder" schema="org.cinnamon.recorder"/>
     <child name="keyboard" schema="org.cinnamon.keyboard"/>
     <child name="desklets" schema="org.cinnamon.desklets" />
@@ -529,6 +598,18 @@
       <description>
        Controls the default label used by the application menu.
       </description>
+    </key>
+    <key name="hoverclick-action" type="s">
+      <default>"single"</default>
+      <summary>The type of mouse action to be performed using hoverkey (single, double, drag, secondary)</summary>
+    </key>
+    <key name="hoverclick-layout" type="s">
+      <default>"vertical::both"</default>
+      <summary>This defines the layout for the hoverkey window - format is vertical | horizontal :: icons | text | both</summary>
+    </key>
+    <key name="hoverclick-position" type="s">
+      <default>""</default>
+      <summary>Stores the position of the hoverclick window so it can be restored there later - format is x::y</summary>
     </key>
   </schema>
 
@@ -873,10 +954,20 @@
     </key>
   </schema>
 
-  <schema id="org.cinnamon.keybindings" path="/org/cinnamon/keybindings/">
-    <key name="custom-list" type="as">
+  <schema id="org.cinnamon.runtime-keybindings" path="/org/cinnamon/runtime-keybindings/">
+    <key name="placeholder" type="b">
+      <default>false</default>
+    </key>
+   </schema>
+
+  <schema id="org.cinnamon.runtime-keybindings.runtime-keybinding">
+    <key name="bindings" type="as">
       <default>[]</default>
-      <summary>deprecated - moved to org.cinnamon.desktop.keybindings</summary>
+      <summary>Keybinding array for runtime keybinding.</summary>
+    </key>
+    <key name="action-id" type="i">
+      <default>0</default>
+      <summary>Action id for keybinding</summary>
     </key>
   </schema>
 

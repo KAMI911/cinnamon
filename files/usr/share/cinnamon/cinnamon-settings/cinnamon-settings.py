@@ -1,55 +1,51 @@
 #!/usr/bin/python3
-
-import getopt
-import sys
-
 from bin import util
 util.strip_syspath_locals()
 
-import os
-import glob
+import argparse
+from functools import cmp_to_key
 import gettext
+import glob
+import locale
+import os
+from setproctitle import setproctitle
+import subprocess
+import sys
 import time
 import traceback
-import locale
-import urllib.request as urllib
-from functools import cmp_to_key
+import typing
 import unicodedata
-import config
-from setproctitle import setproctitle
+import urllib.request as urllib
+from pathlib import Path
 
 import gi
 gi.require_version('Gtk', '3.0')
 gi.require_version('XApp', '1.0')
-from gi.repository import Gio, Gtk, Pango, Gdk, XApp
+from gi.repository import Gio, GLib, Gtk, Pango, Gdk, XApp
 
-sys.path.append(config.currentPath + "/modules")
-sys.path.append(config.currentPath + "/bin")
-import capi
-import proxygsettings
-import SettingsWidgets
+CURRENT_PATH = os.path.dirname(os.path.abspath(__file__))
+PYTHON_CS_MODULE_PATH = os.path.join(CURRENT_PATH, "modules")
+PYTHON_CS_MODULE_GLOB = os.path.join(PYTHON_CS_MODULE_PATH, "cs_*.py")
+PYTHON_CS_MODULES = [Path(file).stem for file in glob.glob(PYTHON_CS_MODULE_GLOB)]
+sys.path.append(PYTHON_CS_MODULE_PATH)
+from bin import capi
+from bin import proxygsettings
+from bin import SettingsWidgets
+import config
 
 # i18n
 gettext.install("cinnamon", "/usr/share/locale", names=["ngettext"])
 
-# Standard setting pages... this can be expanded to include applet dirs maybe?
-mod_files = glob.glob(config.currentPath + "/modules/*.py")
-mod_files.sort()
-if len(mod_files) == 0:
-    print("No settings modules found!!")
-    sys.exit(1)
-
-mod_files = [x.split('/')[-1].split('.')[0] for x in mod_files]
-
-for mod_file in mod_files:
-    if mod_file[0:3] != "cs_":
-        raise Exception("Settings modules must have a prefix of 'cs_' !!")
-
-modules = map(__import__, mod_files)
-
 # i18n for menu item
 menuName = _("System Settings")
 menuComment = _("Control Center")
+
+
+class SidePageData(typing.NamedTuple):
+    sp: SettingsWidgets.SidePage
+    name: str
+    cat: str
+
 
 WIN_WIDTH = 800
 WIN_HEIGHT = 600
@@ -78,92 +74,96 @@ CONTROL_CENTER_MODULES = [
 ]
 
 STANDALONE_MODULES = [
-    # Label                              Executable                             Icon                     Category          Keywords for filter
-    [_("Printers"),                      "system-config-printer",               "cs-printer",            "hardware",       _("printers, laser, inkjet")],
-    [_("Firewall"),                      "gufw",                                "cs-firewall",           "admin",          _("firewall, block, filter, programs")],
-    [_("Firewall"),                      "firewall-config",                     "cs-firewall",           "admin",          _("firewall, block, filter, programs")],
-    [_("Languages"),                     "mintlocale",                          "cs-language",           "prefs",          _("language, install, foreign")],
-    [_("Input Method"),                  "mintlocale-im",                       "cs-input-method",       "prefs",          _("language, install, foreign, input, method, chinese, korean, japanese, typing")],
-    [_("Login Window"),                  "pkexec lightdm-settings",             "cs-login",              "admin",          _("login, lightdm, mdm, gdm, manager, user, password, startup, switch")],
-    [_("Login Window"),                  "lightdm-gtk-greeter-settings-pkexec", "cs-login",              "admin",          _("login, lightdm, manager, settings, editor")],
-    [_("Driver Manager"),                "pkexec driver-manager",               "cs-drivers",            "admin",          _("video, driver, wifi, card, hardware, proprietary, nvidia, radeon, nouveau, fglrx")],
-    [_("Nvidia Settings"),               "nvidia-settings",                     "cs-drivers",            "admin",          _("video, driver, proprietary, nvidia, settings")],
-    [_("Software Sources"),              "pkexec mintsources",                  "cs-sources",            "admin",          _("ppa, repository, package, source, download")],
-    [_("Package Management"),            "dnfdragora",                          "cs-sources",            "admin",          _("update, install, repository, package, source, download")],
-    [_("Package Management"),            "yumex-dnf",                           "cs-sources",            "admin",          _("update, install, repository, package, source, download")],
-    [_("Users and Groups"),              "cinnamon-settings-users",             "cs-user-accounts",      "admin",          _("user, users, account, accounts, group, groups, password")],
-    [_("Bluetooth"),                     "blueberry",                           "cs-bluetooth",          "hardware",       _("bluetooth, dongle, transfer, mobile")],
-    [_("Blueman"),                       "blueman-manager",                     "cs-bluetooth",          "hardware",       _("bluetooth, dongle, transfer, mobile")],
-    [_("Manage Services and Units"),     "systemd-manager-pkexec",              "cs-sources",            "admin",          _("systemd, units, services, systemctl, init")],
-    [_("Disks"),                         "gnome-disks",                         "org.gnome.DiskUtility", "hardware",       _("disks, manage, hardware, management, hard, hdd, pendrive, format, erase, test, create, iso, ISO, disk, image")]
+    # Label                           Executable                              Icon                        Category      Keywords for filter
+    [_("Printers"),                   "system-config-printer",                "cs-printer",                "hardware",   _("printers, laser, inkjet")],
+    [_("Fingerprints"),               "fingwit",                              "fingwit",                   "admin",      _("fingerprint")],
+    [_("Firewall"),                   "gufw",                                 "cs-firewall",               "admin",      _("firewall, block, filter, programs")],
+    [_("Firewall"),                   "firewall-config",                      "cs-firewall",               "admin",      _("firewall, block, filter, programs")],
+    [_("Languages"),                  "mintlocale",                           "cs-language",               "prefs",      _("language, install, foreign")],
+    [_("Input Method"),               "mintlocale-im",                        "cs-input-method",           "prefs",      _("language, install, foreign, input, method, chinese, korean, japanese, typing")],
+    [_("Account Details"),            "mintsysadm-settings-user",             "preferences-desktop-user",  "prefs",      _("user, account, password")],
+    [_("System Information"),         "mintreport",                           "mintreport",                "hardware",   _("info, usb, pci, gpu, bios, report, crash, system")],
+    [_("System Administration"),      "pkexec mintsysadm",                    "mintsysadm",                "admin",      _("adminitration, grub, boot, system")],
+    [_("Login Window"),               "pkexec lightdm-settings",              "cs-login",                  "admin",      _("login, lightdm, mdm, gdm, manager, user, password, startup, switch")],
+    [_("Login Window"),               "lightdm-gtk-greeter-settings-pkexec",  "cs-login",                  "admin",      _("login, lightdm, manager, settings, editor")],
+    [_("Login Window"),               "gdm-settings",                         "gdm-settings",              "admin",      _("login, gdm, manager, user, startup, switch")],
+    [_("Driver Manager"),             "cinnamon-driver-manager",              "cs-drivers",                "admin",      _("video, driver, wifi, card, hardware, proprietary, nvidia, radeon, nouveau, fglrx")],
+    [_("Nvidia Settings"),            "nvidia-settings",                      "nvidia-settings",           "admin",      _("video, driver, proprietary, nvidia, settings")],
+    [_("Software Sources"),           "pkexec mintsources",                   "cs-sources",                "admin",      _("ppa, repository, package, source, download")],
+    [_("Package Management"),         "dnfdragora",                           "dnfdragora",                "admin",      _("update, install, repository, package, source, download")],
+    [_("Package Management"),         "gpk-application",                      "gpk-prefs",                 "admin",      _("update, install, repository, package, source, download")],
+    [_("Package Management"),         "/usr/bin/octopi",                      "octopi",                    "admin",      _("update, install, repository, package, source, download")],
+    [_("Package Management"),         "pamac-manager",                        "system-software-install",   "admin",      _("update, install, repository, package, source, download")],
+    [_("Package Management"),         "yumex",                                "yumex",                     "admin",      _("update, install, repository, package, source, download")],
+    [_("Users and Groups"),           "cinnamon-settings-users",              "cs-user-accounts",          "admin",      _("user, users, account, accounts, group, groups, password")],
+    [_("Users"),                      "mintsysadm --user",                    "system-config-users",       "admin",      _("user, users, account, accounts, password")],
+    [_("Bluetooth"),                  "blueberry",                            "cs-bluetooth",              "hardware",   _("bluetooth, dongle, transfer, mobile")],
+    [_("Bluetooth"),                  "blueman-manager",                      "cs-bluetooth",              "hardware",   _("bluetooth, dongle, transfer, mobile")],
+    [_("Manage Services and Units"),  "systemd-manager-pkexec",               "cs-sources",                "admin",      _("systemd, units, services, systemctl, init")],
+    [_("Disks"),                      "gnome-disks",                          "org.gnome.DiskUtility",     "hardware",   _("disks, manage, hardware, management, hard, hdd, pendrive, format, erase, test, create, iso, ISO, disk, image")],
+    [_("Online Accounts"),            "gnome-online-accounts-gtk",            "gnome-online-accounts-gtk", "prefs",      _("google, microsoft, nextcloud, owncloud")]
+]
+
+ALTERNATE_MODULES = [
+    # Label                  Executable                  Icon                        Category  Keywords for filter
+    [_("Software Sources"),           "software-properties-gtk",              "software-properties-gtk",   "admin",      _("ppa, repository, package, source, download, video, driver, wifi, card, hardware, proprietary, nvidia, radeon, nouveau, fglrx")],
+    [_("Package Management"),         "pkexec synaptic",                      "synaptic",                  "admin",      _("update, install, repository, package, source, download")],
 ]
 
 TABS = {
     # KEY (cs_KEY.py) : {"tab_name": tab_number, ... }
-    "universal-access": {"visual": 0, "keyboard": 1, "typing": 2, "mouse": 3},
+    "accessibility":    {"visual": 0, "keyboard": 1, "typing": 2, "mouse": 3},
     "applets":          {"installed": 0, "more": 1, "download": 1},
+    "actions":          {"installed": 0, "more": 1, "download": 1, "layout": 2},
     "backgrounds":      {"images": 0, "settings": 1},
     "default":          {"preferred": 0, "removable": 1},
     "desklets":         {"installed": 0, "more": 1, "download": 1, "general": 2},
     "display":          {"layout": 0, "settings": 1},
-    "effects":          {"effects": 0, "customize": 1},
+    "effects":          {"default": 0},
     "extensions":       {"installed": 0, "more": 1, "download": 1},
+    "gestures":         {"swipe": 0, "pinch": 1, "tap": 2, "settings": 3},
     "keyboard":         {"typing": 0, "shortcuts": 1, "layouts": 2},
     "mouse":            {"mouse": 0, "touchpad": 1},
     "power":            {"power": 0, "batteries": 1, "brightness": 2},
     "screensaver":      {"settings": 0, "customize": 1},
-    "sound":            {"output": 0, "input": 1, "sounds": 2, "applications": 3, "settings": 4},
-    "themes":           {"themes": 0, "download": 1, "options": 2},
-    "windows":          {"titlebar": 0, "behavior": 1, "alttab": 2},
+    "sound":            {"output": 0, "input": 1, "sounds": 2, "applications": 3},
+    "themes":           {"simplified": 0, "themes": 1, "download": 2, "options": 3},
+    "windows":          {"titlebar": 0, "behavior": 1, "alttab": 2, "tiling": 3},
     "workspaces":       {"osd": 0, "settings": 1}
 }
 
-ARG_REWRITE = {
-    'accessibility':    'universal-access',
+CS_MODULE_ALIASES = {
+    'universal-access': 'accessibility',
     'screen':           'display',
     'screens':          'display',
-    'bluetooth':        'blueberry',
     'hotcorners':       'hotcorner',
-    'accounts':         'online-accounts',
     'colors':           'color',
     'me':               'user',
-    'lightdm-settings': 'pkexec lightdm-settings',
-    'login-screen':     'pkexec lightdm-settings',
     'window':           'windows',
     'background':       'backgrounds',
-    'driver-manager':   'pkexec driver-manager',
-    'drivers':          'pkexec driver-manager',
-    'printers':         'system-config-printer',
-    'printer':          'system-config-printer',
     'infos':            'info',
-    'locale':           'mintlocale',
-    'language':         'mintlocale',
-    'input-method':     'mintlocale-im',
-    'nvidia':           'nvidia-settings',
-    'firewall':         'gufw',
     'networks':         'network',
-    'sources':          'pkexec mintsources',
-    'mintsources':      'pkexec mintsources',
     'panels':           'panel',
     'tablet':           'wacom',
-    'users':            'cinnamon-settings-users'
 }
 
+SORT_CHOICES = {
+    "name":         "0",
+    "score":        "1",
+    "date":         "2",
+    "installed":    "3",
+    "update":       "4"
+}
 
 def print_timing(func):
     # decorate functions with @print_timing to output how long they take to run.
-    def wrapper(*arg):
+    def wrapper(*args, **kwargs):
         t1 = time.time()
-        res = func(*arg)
+        res = func(*args, **kwargs)
         t2 = time.time()
-        print('%s took %0.3f ms' % (func.func_name, (t2-t1)*1000.0))
+        print(f'{func.__name__} took {(t2-t1)*1000.0:0.3f} ms')
         return res
     return wrapper
-
-
-def touch(fname, times=None):
-    with open(fname, 'a'):
-        os.utime(fname, times)
 
 
 class MainWindow(Gio.Application):
@@ -174,7 +174,9 @@ class MainWindow(Gio.Application):
             self.deselect(cat)
             filtered_path = side_view.get_model().convert_path_to_child_path(selected_items[0])
             if filtered_path is not None:
-                self.go_to_sidepage(cat, filtered_path, user_action=True)
+                iterator = self.store_by_cat[cat].get_iter(filtered_path)
+                sidePage = self.store_by_cat[cat].get_value(iterator, 2)
+                self.go_to_sidepage(sidePage, user_action=True)
 
     def _on_sidepage_hide_stack(self):
         self.stack_switcher.set_opacity(0)
@@ -182,57 +184,58 @@ class MainWindow(Gio.Application):
     def _on_sidepage_show_stack(self):
         self.stack_switcher.set_opacity(1)
 
-    def go_to_sidepage(self, cat, path, user_action=True):
-        iterator = self.store[cat].get_iter(path)
-        sidePage = self.store[cat].get_value(iterator, 2)
-        if not sidePage.is_standalone:
-            if not user_action:
-                self.window.set_title(sidePage.name)
-                self.window.set_icon_name(sidePage.icon)
-            sidePage.build()
-            if sidePage.stack:
-                self.stack_switcher.set_stack(sidePage.stack)
-                l = sidePage.stack.get_children()
-                if len(l) > 0:
-                    if self.tab in range(len(l)):
-                        sidePage.stack.set_visible_child(l[self.tab])
-                        visible_child = sidePage.stack.get_visible_child()
-                        if self.tab == 1 \
-                        and hasattr(visible_child, 'sort_combo') \
-                        and self.sort in range(5):
-                            visible_child.sort_combo.set_active(self.sort)
-                            visible_child.sort_changed()
-                    else:
-                        sidePage.stack.set_visible_child(l[0])
-                    if sidePage.stack.get_visible():
-                        self.stack_switcher.set_opacity(1)
-                    else:
-                        self.stack_switcher.set_opacity(0)
-                    if hasattr(sidePage, "connect_proxy"):
-                        sidePage.connect_proxy("hide_stack", self._on_sidepage_hide_stack)
-                        sidePage.connect_proxy("show_stack", self._on_sidepage_show_stack)
+    def go_to_sidepage(self, sidePage: SettingsWidgets.SidePage, user_action=True):
+        sidePage.build()
+
+        if sidePage.is_standalone:
+            return  # we're done
+
+        if not user_action:
+            self.window.set_title(sidePage.name)
+            self.window.set_icon_name(sidePage.icon)
+        else:
+            self.window.set_title(_("System Settings") + " > " + sidePage.name)
+
+        if sidePage.stack:
+            self.stack_switcher.set_stack(sidePage.stack)
+            l = sidePage.stack.get_children()
+            if len(l) > 0:
+                if self.tab in range(len(l)):
+                    sidePage.stack.set_visible_child(l[self.tab])
+                    visible_child = sidePage.stack.get_visible_child()
+                    if hasattr(visible_child, 'spices_sort_combo') \
+                            and self.sort in range(5):
+                        visible_child.spices_sort_combo.set_active(self.sort)
+                        visible_child.sort_changed()
+                else:
+                    sidePage.stack.set_visible_child(l[0])
+                if sidePage.stack.get_visible():
+                    self.stack_switcher.set_opacity(1)
                 else:
                     self.stack_switcher.set_opacity(0)
+                if hasattr(sidePage, "connect_proxy"):
+                    sidePage.connect_proxy("hide_stack", self._on_sidepage_hide_stack)
+                    sidePage.connect_proxy("show_stack", self._on_sidepage_show_stack)
             else:
                 self.stack_switcher.set_opacity(0)
-
-            if user_action:
-                self.main_stack.set_visible_child_name("content_box_page")
-                self.header_stack.set_visible_child_name("content_box")
-
-            else:
-                self.main_stack.set_visible_child_full("content_box_page", Gtk.StackTransitionType.NONE)
-                self.header_stack.set_visible_child_full("content_box", Gtk.StackTransitionType.NONE)
-
-            self.current_sidepage = sidePage
-            width = 0
-            for widget in self.top_bar:
-                m, n = widget.get_preferred_width()
-                width += n
-            self.top_bar.set_size_request(width + 20, -1)
-            self.maybe_resize(sidePage)
         else:
-            sidePage.build()
+            self.stack_switcher.set_opacity(0)
+
+        if user_action:
+            self.main_stack.set_visible_child_name("content_box_page")
+            self.header_stack.set_visible_child_name("content_box")
+        else:
+            self.main_stack.set_visible_child_full("content_box_page", Gtk.StackTransitionType.NONE)
+            self.header_stack.set_visible_child_full("content_box", Gtk.StackTransitionType.NONE)
+
+        self.current_sidepage = sidePage
+        width = 0
+        for widget in self.top_bar:
+            m, n = widget.get_preferred_width()
+            width += n
+        self.top_bar.set_size_request(width + 20, -1)
+        self.calculate_bar_heights()
+        self.maybe_resize(sidePage)
 
     def maybe_resize(self, sidePage):
         m, n = self.content_box.get_preferred_size()
@@ -249,7 +252,8 @@ class MainWindow(Gio.Application):
             use_height = sidePage.size + self.bar_heights + WIN_H_PADDING
         elif sidePage.size == -1:
             # Module requested the window to fit it (i.e. shrink the window if necessary)
-            use_height = total_height
+            use_height = total_height + self.bar_heights
+
 
         self.window.resize(WIN_WIDTH, use_height)
 
@@ -259,13 +263,13 @@ class MainWindow(Gio.Application):
                 self.side_view[key].unselect_all()
 
     # Create the UI
-    def __init__(self):
+    def __init__(self, parsed_args):
         Gio.Application.__init__(self,
-                                 application_id="org.cinnamon.Settings_%d" % os.getpid(),
+                                 application_id=f"org.cinnamon.Settings_{os.getpid()}",
                                  flags=Gio.ApplicationFlags.NON_UNIQUE | Gio.ApplicationFlags.HANDLES_OPEN)
         self.builder = Gtk.Builder()
         self.builder.set_translation_domain('cinnamon')  # let it translate!
-        self.builder.add_from_file(config.currentPath + "/cinnamon-settings.ui")
+        self.builder.add_from_file(os.path.join(CURRENT_PATH, "cinnamon-settings.ui"))
         self.window = XApp.GtkWindow(window_position=Gtk.WindowPosition.CENTER,
                                      default_width=800, default_height=600)
 
@@ -301,10 +305,10 @@ class MainWindow(Gio.Application):
         self.search_entry.connect("icon-press", self.onClearSearchBox)
 
         self.window.connect("destroy", self._quit)
+        GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, self._quit)
 
         self.builder.connect_signals(self)
-        self.unsortedSidePages = []
-        self.sidePages = []
+        self.sidePages: typing.List[SidePageData] = []
         self.settings = Gio.Settings.new("org.cinnamon")
         self.current_cat_widget = None
 
@@ -313,58 +317,64 @@ class MainWindow(Gio.Application):
         self.content_box.c_manager = self.c_manager
         self.bar_heights = 0
 
-        for module in modules:
-            try:
-                mod = module.Module(self.content_box)
-                if self.loadCheck(mod) and self.setParentRefs(mod):
-                    self.unsortedSidePages.append((mod.sidePage, mod.name, mod.category))
-            except:
-                print("Failed to load module %s" % module)
-                traceback.print_exc()
+        self.tab = -1  # open 'manage' tab by default
+        self.sort = 1  # sorted by 'score' by default
 
-        for item in CONTROL_CENTER_MODULES:
-            ccmodule = SettingsWidgets.CCModule(item[0], item[1], item[2], item[3], item[4], self.content_box)
-            if ccmodule.process(self.c_manager):
-                self.unsortedSidePages.append((ccmodule.sidePage, ccmodule.name, ccmodule.category))
+        self.store_by_cat: typing.Dict[str, Gtk.ListStore] = {}
+        self.storeFilter = {}
 
-        for item in STANDALONE_MODULES:
-            samodule = SettingsWidgets.SAModule(item[0], item[1], item[2], item[3], item[4], self.content_box)
-            if samodule.process():
-                self.unsortedSidePages.append((samodule.sidePage, samodule.name, samodule.category))
+        # load CCC and standalone modules, but not python modules yet
+        self.load_ccc_modules()
+        self.has_mintsources = False
+        self.load_standalone_modules(STANDALONE_MODULES)
+        if not self.has_mintsources:
+            self.load_standalone_modules(ALTERNATE_MODULES)
 
-        # sort the modules alphabetically according to the current locale
+        # if a certain sidepage is given via arguments, try to load only it
+        if parsed_args.module != None:
+            if self.load_sidepage_as_standalone(parsed_args):
+                return
+
+        self.init_settings_overview()
+
+    def init_settings_overview(self):
+        """Load the system settings overview (default)
+
+        This requires to initialize all settings modules.
+        """
+        # 1. load all python modules
+        self.load_python_modules()
+
+        # 2. sort the modules alphabetically according to the current locale
         localeStrKey = cmp_to_key(locale.strcoll)
         # Apply locale key to the field name of each side page.
         sidePagesKey = lambda m: localeStrKey(m[0].name)
-        self.sidePages = sorted(self.unsortedSidePages, key=sidePagesKey)
+        self.sidePages = sorted(self.sidePages, key=sidePagesKey)
 
-        # create the backing stores for the side nav-view.
-        sidePagesIters = {}
-        self.store = {}
-        self.storeFilter = {}
+        # 3. create the backing stores for the side nav-view.
         for sidepage in self.sidePages:
             sp, sp_id, sp_cat = sidepage
-            if sp_cat not in self.store:        #       Label         Icon    sidePage    Category
-                self.store[sidepage[2]] = Gtk.ListStore(str,          str,    object,     str)
+            if sidepage.cat not in self.store_by_cat:
+                self.store_by_cat[sidepage.cat] = Gtk.ListStore(str, Gio.ThemedIcon, object, str) # Label, Icon, sidePage, Category
                 for category in CATEGORIES:
-                    if category["id"] == sp_cat:
+                    if category["id"] == sidepage.cat:
                         category["show"] = True
 
             # Don't allow item names (and their translations) to be more than 30 chars long. It looks ugly and it creates huge gaps in the icon views
             name = sp.name
             if len(name) > 30:
-                name = "%s..." % name[:30]
-            sidePagesIters[sp_id] = (self.store[sp_cat].append([name, sp.icon, sp, sp_cat]), sp_cat)
+                name = f"{name[:30]}..."
+            self.store_by_cat[sp_cat].append([name, Gio.ThemedIcon.new(sp.icon), sp, sp_cat])
 
         self.min_label_length = 0
         self.min_pix_length = 0
 
-        for key in self.store:
-            char, pix = self.get_label_min_width(self.store[key])
+        for cat in self.store_by_cat:
+            char, pix = self.get_label_min_width(self.store_by_cat[cat])
             self.min_label_length = max(char, self.min_label_length)
             self.min_pix_length = max(pix, self.min_pix_length)
-            self.storeFilter[key] = self.store[key].filter_new()
-            self.storeFilter[key].set_visible_func(self.filter_visible_function)
+            self.storeFilter[cat] = self.store_by_cat[cat].filter_new()
+            self.storeFilter[cat].set_visible_func(self.filter_visible_function)
 
         self.min_label_length += 2
         self.min_pix_length += 4
@@ -383,73 +393,89 @@ class MainWindow(Gio.Application):
 
         self.calculate_bar_heights()
 
-        self.tab = 0  # open 'manage' tab by default
-        self.sort = 1  # sorted by 'score' by default
+        self.search_entry.grab_focus()
+        self.window.connect("key-press-event", self.on_keypress)
+        self.window.connect("button-press-event", self.on_buttonpress)
 
-        # Select the first sidePage
-        if len(sys.argv) > 1:
-            arg1 = sys.argv[1]
-            if arg1 in ARG_REWRITE.keys():
-                arg1 = ARG_REWRITE[arg1]
-        if len(sys.argv) > 1 and arg1 in sidePagesIters:
-            # Analyses arguments to know the tab to open
-            # and the sort to apply if the tab is the 'more' one.
-            # Examples:
-            #   cinnamon-settings.py applets --tab=more --sort=date
-            #   cinnamon-settings.py applets --tab=1 --sort=2
-            #   cinnamon-settings.py applets --tab=more --sort=date
-            #   cinnamon-settings.py applets --tab=1 -s 2
-            #   cinnamon-settings.py applets -t 1 -s installed
-            #   cinnamon-settings.py desklets -t 2
-            # Please note that useless or wrong arguments are ignored.
-            opts = []
-            sorts_literal = {"name":0, "score":1, "date":2, "installed":3, "update":4}
-            tabs_literal = {"default":0}
-            if arg1 in TABS.keys():
-                tabs_literal = TABS[arg1]
+        self.window.show()
 
-            try:
-                if len(sys.argv) > 2:
-                    opts = getopt.getopt(sys.argv[2:], "t:s:", ["tab=", "sort="])[0]
-            except getopt.GetoptError:
-                pass
+    def load_sidepage_as_standalone(self, args) -> bool:
+        if f"cs_{args.module}" in PYTHON_CS_MODULES:
+            self.load_python_modules(only_module=args.module)
 
-            for opt, arg in opts:
-                if opt in ("-t", "--tab"):
-                    if arg.isdecimal():
-                        self.tab = int(arg)
-                    elif arg in tabs_literal.keys():
-                        self.tab = tabs_literal[arg]
-                if opt in ("-s", "--sort"):
-                    if arg.isdecimal():
-                        self.sort = int(arg)
-                    elif arg in sorts_literal.keys():
-                        self.sort = sorts_literal[arg]
+        if args.tab is not None:
+            module_tabs = TABS.get(args.module, {"default": 0})
+            if args.tab.isdecimal():
+                self.tab = int(args.tab)
+            elif args.tab in module_tabs.keys():
+                self.tab = module_tabs[args.tab]
 
-            # If we're launching a module directly, set the WM class so GWL
-            # can consider it as a standalone app and give it its own
-            # group.
-            wm_class = "cinnamon-settings %s" % arg1
-            self.window.set_wmclass(wm_class, wm_class)
-            self.button_back.hide()
-            (iter, cat) = sidePagesIters[arg1]
-            path = self.store[cat].get_path(iter)
-            if path:
-                self.go_to_sidepage(cat, path, user_action=False)
-                self.window.show()
-                if arg1 in ("mintlocale", "blueberry", "system-config-printer", "mintlocale-im", "nvidia-settings"):
+        if args.sort is not None:
+            if args.sort.isdecimal():
+                self.sort = int(args.sort)
+            elif args.sort in SORT_CHOICES.keys():
+                self.sort = int(SORT_CHOICES[args.sort])
+
+        # (4) set the WM class so GWL can consider it as a standalone app and give it its own group.
+        wm_class = f"cinnamon-settings {args.module}"
+        self.window.set_wmclass(wm_class, wm_class)
+        self.button_back.hide()
+
+        # (5) find and show it
+        for sp_data in self.sidePages:
+            if sp_data.name == args.module:
+                self.go_to_sidepage(sp_data.sp, user_action=False)
+                if sp_data.sp.is_standalone:
                     # These modules do not need to leave the System Settings window open,
                     # when selected by command line argument.
                     self.window.close()
-            else:
-                self.search_entry.grab_focus()
-                self.window.show()
-        else:
-            self.search_entry.grab_focus()
-            self.window.connect("key-press-event", self.on_keypress)
-            self.window.connect("button-press-event", self.on_buttonpress)
+                else:
+                    self.window.show()
+                return True
+        return False
 
-            self.window.show()
+    def load_ccc_modules(self):
+        """Loads all Cinnamon Control Center settings modules."""
+        for item in CONTROL_CENTER_MODULES:
+            ccmodule = SettingsWidgets.CCModule(item[0], item[1], item[2], item[3], item[4], self.content_box)
+            if ccmodule.process(self.c_manager):
+                self.sidePages.append(SidePageData(ccmodule.sidePage, ccmodule.name, ccmodule.category))
+            else:
+                print("warning: failed to process CCC module", item[1])
+
+    def load_standalone_modules(self, mods: list) -> None:
+        """Loads all standalone settings modules."""
+        for item in mods:
+            samodule = SettingsWidgets.SAModule(item[0], item[1], item[2], item[3], item[4], self.content_box)
+            if samodule.process():
+                self.sidePages.append(SidePageData(samodule.sidePage, samodule.name, samodule.category))
+                if 'mintsources' in samodule.name:
+                    self.has_mintsources = True
+            # else:
+            #    print(f"note: skipped standalone module {samodule.name} (not found in PATH).")
+
+    def load_python_modules(self, only_module: str = None) -> bool:
+        """Loads all or only a given settings module(s) written in python.
+
+        :param only_module: (optional) module name to be loaded exclusively
+        :return: True if successful, False otherwise
+        """
+        # Standard setting pages... this can be expanded to include applet dirs maybe?
+
+        if only_module is not None:
+            to_import = [f"cs_{only_module}"]
+        else:
+            to_import = PYTHON_CS_MODULES
+
+        for module in map(__import__, to_import):
+            try:
+                mod = module.Module(self.content_box)
+                if self.loadCheck(mod) and self.setParentRefs(mod):
+                    self.sidePages.append(SidePageData(mod.sidePage, mod.name, mod.category))
+            except:
+                print(f"failed to load python module {module}", file=sys.stderr)
+                traceback.print_exc()
+        return True
 
     # If there are no arguments, do_active() is called, otherwise do_open().
     def do_activate(self):
@@ -516,7 +542,7 @@ class MainWindow(Gio.Application):
         min_width_pixels = 0
         icon_view = Gtk.IconView()
         iter = model.get_iter_first()
-        while iter != None:
+        while iter is not None:
             string = model.get_value(iter, 0)
             split_by_word = string.split(" ")
             for word in split_by_word:
@@ -548,7 +574,7 @@ class MainWindow(Gio.Application):
 
         widget = Gtk.Label(yalign=0.5)
         widget.set_use_markup(True)
-        widget.set_markup('<span size="12000">%s</span>' % category["label"])
+        widget.set_markup(f'<span size="12000">{category["label"]}</span>')
         box.pack_start(widget, False, False, 1)
         self.side_view_container.pack_start(box, False, False, 0)
         widget = Gtk.IconView.new_with_model(self.storeFilter[category["id"]])
@@ -566,7 +592,7 @@ class MainWindow(Gio.Application):
 
         area.pack_start(pixbuf_renderer, True, True, False)
         area.pack_start(text_renderer, True, True, False)
-        area.add_attribute(pixbuf_renderer, "icon-name", 1)
+        area.add_attribute(pixbuf_renderer, "gicon", 1)
         pixbuf_renderer.set_property("stock-size", Gtk.IconSize.DIALOG)
         pixbuf_renderer.set_property("follow-state", True)
 
@@ -602,7 +628,7 @@ class MainWindow(Gio.Application):
             if (final_y > 0) and ((final_y + rect.height) < page):
                 return
 
-            if ((final_y + rect.height) > page):
+            if (final_y + rect.height) > page:
                 adj.set_value(current_pos + final_y + rect.height - page + 10)
             elif final_y < 0:
                 # We can just add a negative here (since final_y < 0), but it's less
@@ -730,6 +756,68 @@ class MainWindow(Gio.Application):
         self.quit()
 
 if __name__ == "__main__":
+    formatted_mods = ""
+    i = 0
+    for mod in PYTHON_CS_MODULES:
+        formatted_mods += mod.replace("cs_", "") + ", "
+        i += 1
+        if i == 8:
+            formatted_mods += "\n    "
+            i = 0
+    EPILOG = f"""
+Available modules:
+    {formatted_mods}
+
+To see a list of available tabs for a specific module, use `cinnamon-settings MODULE --tab help`
+
+SORT_TYPE can be specified by number or name as follows:
+    0 | name:       Sort by name
+    1 | score:      Sort by score
+    2 | date:       Sort by date
+    3 | installed:  Show installed first
+    4 | update:     Show upgradable first, then sort by date
+    """
+    sort_options = list(SORT_CHOICES.keys()) + list(SORT_CHOICES.values())
+
+    parser = argparse.ArgumentParser(
+        description="cinnamon-settings - Configuration tool for Cinnamon",
+        epilog=EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("module", type=str, nargs="?", help='Open a specific settings module.')
+    parser.add_argument('-t', '--tab', type=str, help='Open a specific tab in the settings module. You can specify name or index.')
+    parser.add_argument('-s', '--sort', type=str, choices=sort_options, metavar="SORT_TYPE", help="If opening an xlet module, sort the items by a specific criteria.")
+    parser.add_argument('-p', '--panel', type=str, metavar="PANEL_ID", help="If opening the panel or applets module, specify a starting panel by its id")
+    args = parser.parse_args()
+
+    def find_module_name(name):
+        return f"cs_{name}" in PYTHON_CS_MODULES or name in [item[1] for item in CONTROL_CENTER_MODULES]
+
+    if args.module is not None and not find_module_name(args.module):
+        if args.module == "user":
+            subprocess.Popen(["cinnamon-settings-user"])
+            sys.exit(0)
+
+
+        new_mod = CS_MODULE_ALIASES.get(args.module, None)
+        if not find_module_name(new_mod):
+            print(f"warning: settings module {args.module} not found. Ignoring any remaining arguments.")
+        args.module = new_mod
+
+    if args.module is not None and args.tab == "help":
+        if args.module in TABS:
+            print(f"Available tabs for '{args.module}':")
+            for key in TABS[args.module]:
+                print(f"    {key}")
+        else:
+            print(f"Module '{args.module}' does not have any tabs.")
+        exit(0)
+
+    if args.panel is not None and args.module not in ("applets", "panel"):
+        print("Warning: --panel option is only supported when opening the applets or panel module.")
+
+    config.PARSED_ARGS = args
+
     setproctitle("cinnamon-settings")
     import signal
 
@@ -740,6 +828,6 @@ if __name__ == "__main__":
         proxy = urllib.ProxyHandler()
     urllib.install_opener(urllib.build_opener(proxy))
 
-    window = MainWindow()
+    window = MainWindow(args)
     signal.signal(signal.SIGINT, signal.SIG_DFL)
-    window.run(sys.argv)
+    window.run()

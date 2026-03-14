@@ -2,11 +2,12 @@ const Lang = imports.lang;
 const Mainloop = imports.mainloop;
 const St = imports.gi.St;
 const Gio = imports.gi.Gio;
+const Clutter = imports.gi.Clutter;
+const GLib = imports.gi.GLib;
 
 const Applet = imports.ui.applet;
 const Main = imports.ui.main;
 const SignalManager = imports.misc.signalManager;
-const Tweener = imports.ui.tweener;
 const {PanelLoc} = imports.ui.panel;
 
 const DESKTOP_SCHEMA = 'org.cinnamon.desktop.interface';
@@ -67,19 +68,36 @@ TooltipBase.prototype = {
         this.signals.connect(item, 'button-press-event', this._hide, this);
         this.signals.connect(item, 'button-release-event', this._hide, this);
         this.signals.connect(item, 'destroy', this.destroy, this);
-        this.signals.connect(item, 'allocation-changed', function() {
-            // An allocation change could mean that the actor has moved,
-            // so hide, but wait until after the allocation cycle.
-            Mainloop.idle_add(Lang.bind(this, function() {
-                this._hide();
-            }));
-        }, this);
+
+        this._allocate_idle_id = 0;
+        this.signals.connect(item, 'notify::allocation', this._allocation_changed.bind(this));
 
         this._showTimer = null;
         this.visible = false;
         this.item = item;
         this.preventShow = false;
         this.mousePosition = null;
+    },
+
+    _allocation_changed: function(item, pspec) {
+        // An allocation change could mean that the actor has moved,
+        // so hide, but wait until after the allocation cycle.
+        if (this._allocate_idle_id > 0) {
+            Mainloop.source_remove(this._allocate_idle_id);
+        }
+
+        this._allocate_idle_id = Mainloop.idle_add(Lang.bind(this, function() {
+            this._allocate_idle_id = 0;
+            this._hide();
+            return GLib.SOURCE_REMOVE;
+        }));
+    },
+
+    _roundedMousePosition: function(event) {
+        let [x, y] = event.get_coords();
+        let rmp = [Math.round(x), Math.round(y)];
+
+        return rmp;
     },
 
     _onMotionEvent: function(actor, event) {
@@ -95,7 +113,7 @@ TooltipBase.prototype = {
 
         if (!this.visible) {
             this._showTimer = Mainloop.timeout_add(300, Lang.bind(this, this._onShowTimerComplete));
-            this.mousePosition = event.get_coords();
+            this.mousePosition = this._roundedMousePosition(event);
         } else {
             this._hideTimer = Mainloop.timeout_add(500, Lang.bind(this, this._onHideTimerComplete));
         }
@@ -104,7 +122,7 @@ TooltipBase.prototype = {
     _onEnterEvent: function(actor, event) {
         if (!this._showTimer) {
             this._showTimer = Mainloop.timeout_add(300, Lang.bind(this, this._onShowTimerComplete));
-            this.mousePosition = event.get_coords();
+            this.mousePosition = this._roundedMousePosition(event);
         }
     },
 
@@ -129,14 +147,14 @@ TooltipBase.prototype = {
     },
 
     _hide: function(actor, event) {
-        if (this._showTimer) {
+        if (this._showTimer > 0) {
             Mainloop.source_remove(this._showTimer);
-            this._showTimer = null;
+            this._showTimer = 0;
         }
 
-        if (this._hideTimer) {
+        if (this._hideTimer > 0) {
             Mainloop.source_remove(this._hideTimer);
-            this._hideTimer = null;
+            this._hideTimer = 0;
         }
 
         this.hide();
@@ -148,14 +166,19 @@ TooltipBase.prototype = {
      * Destroys the tooltip.
      */
     destroy: function() {
-        if (this._showTimer) {
-            Mainloop.source_remove(this._showTimer);
-            this._showTimer = null;
+        if (this._allocate_idle_id > 0) {
+            Mainloop.source_remove(this._allocate_idle_id);
+            this._allocate_idle_id = 0;
         }
 
-        if (this._hideTimer) {
+        if (this._showTimer > 0) {
+            Mainloop.source_remove(this._showTimer);
+            this._showTimer = 0;
+        }
+
+        if (this._hideTimer > 0) {
             Mainloop.source_remove(this._hideTimer);
-            this._hideTimer = null;
+            this._hideTimer = 0;
         }
 
         this.signals.disconnectAllSignals();
@@ -243,7 +266,11 @@ Tooltip.prototype = {
      */
     set_text: function(text) {
         this._tooltip.set_text(text);
-        this._tooltip.get_clutter_text().set_use_markup(false);
+        this._tooltip.clutter_text.set_use_markup(false);
+        this._tooltip.clutter_text.allocate_preferred_size(Clutter.AllocationFlags.NONE);
+        // we need to trigger a reallocation to make the tooltip the right size, but this can lead to the text getting
+        // off-center in some situations, so also trigger a relayout.
+        this._tooltip.queue_relayout();
     },
 
     /**
@@ -254,7 +281,11 @@ Tooltip.prototype = {
      */
     set_markup: function(markup) {
         this._tooltip.set_text(markup);
-        this._tooltip.get_clutter_text().set_use_markup(true);
+        this._tooltip.clutter_text.set_use_markup(true);
+        this._tooltip.clutter_text.allocate_preferred_size(Clutter.AllocationFlags.NONE);
+        // we need to trigger a reallocation to make the tooltip the right size, but this can lead to the text getting
+        // off-center in some situations, so also trigger a relayout.
+        this._tooltip.queue_relayout();
     },
 
     _destroy: function() {
@@ -308,7 +339,7 @@ PanelItemTooltip.prototype = {
     },
 
     show: function() {
-        if (this._tooltip.get_text() == "" || global.menuStackLength > 0 || !this.mousePosition)
+        if (this._tooltip.get_text() == "" || global.menuStack.length > 0 || !this.mousePosition)
             return;
 
         let op = this._tooltip.get_opacity();
@@ -341,12 +372,30 @@ PanelItemTooltip.prototype = {
                 panel = Main.panelManager.getPanel(monitor.index, PanelLoc.left);
                 tooltipTop = this._panelItem.actor.get_transformed_position()[1];
                 tooltipTop += Math.round((this._panelItem.actor.height - tooltipHeight) / 2);
+
+                // Fix for the tooltip clipping outside the screen when it's very close to the top or bottom.
+                if (tooltipTop < monitor.y) {
+                    tooltipTop = monitor.y;
+                }
+                else if (tooltipTop + tooltipHeight > monitor.y + monitor.height) {
+                    tooltipTop = monitor.y + monitor.height - tooltipHeight;
+                }
+
                 tooltipLeft = monitor.x + panel.actor.width;
                 break;
             case St.Side.RIGHT:
                 panel = Main.panelManager.getPanel(monitor.index, PanelLoc.right);
                 tooltipTop = this._panelItem.actor.get_transformed_position()[1];
                 tooltipTop += Math.round((this._panelItem.actor.height - tooltipHeight) / 2);
+
+                // Fix for the tooltip clipping outside the screen when it's very close to the top or bottom.
+                if (tooltipTop < monitor.y) {
+                    tooltipTop = monitor.y;
+                }
+                else if (tooltipTop + tooltipHeight > monitor.y + monitor.height) {
+                    tooltipTop = monitor.y + monitor.height - tooltipHeight;
+                }
+
                 tooltipLeft = monitor.x + monitor.width - tooltipWidth - panel.actor.width;
                 break;
             default:

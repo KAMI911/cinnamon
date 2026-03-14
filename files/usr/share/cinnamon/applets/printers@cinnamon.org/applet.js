@@ -30,7 +30,7 @@ class CinnamonPrintersApplet extends Applet.TextIconApplet {
         this.settings = new Settings.AppletSettings(this, metadata.uuid, instance_id);
         this.settings.bind('show-icon', 'show_icon', this.update);
 
-        global.settings.connect('changed::' + PANEL_EDIT_MODE_KEY, Lang.bind(this, this._on_panel_edit_mode_changed));
+        this.panelEditModeHandler = global.settings.connect('changed::' + PANEL_EDIT_MODE_KEY, Lang.bind(this, this._on_panel_edit_mode_changed));
 
         this.jobsCount = 0;
         this.printersCount = 0;
@@ -39,7 +39,7 @@ class CinnamonPrintersApplet extends Applet.TextIconApplet {
         this.updating = false;
         this.showLater = false;
         this.printers = [];
-        this.set_applet_icon_symbolic_name('printer');
+        this.set_applet_icon_symbolic_name('xsi-printer');
         this.update();
     }
 
@@ -56,6 +56,7 @@ class CinnamonPrintersApplet extends Applet.TextIconApplet {
 
     on_applet_removed_from_panel() {
         this.settings.finalize();
+        global.settings.disconnect(this.panelEditModeHandler);
     }
 
     _on_panel_edit_mode_changed () {
@@ -128,7 +129,7 @@ class CinnamonPrintersApplet extends Applet.TextIconApplet {
         this.jobsCount = 0;
         this.printersCount = 0;
         this.menu.removeAll();
-        let printers = new PopupMenu.PopupIconMenuItem(_("Printers"), 'printer', St.IconType.SYMBOLIC);
+        let printers = new PopupMenu.PopupIconMenuItem(_("Printers"), 'xsi-printer', St.IconType.SYMBOLIC);
         printers.connect('activate', Lang.bind(this, this.onShowPrintersClicked));
         this.menu.addMenuItem(printers);
         this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem);
@@ -150,9 +151,9 @@ class CinnamonPrintersApplet extends Applet.TextIconApplet {
                 for(var n = 0; n < this.printersCount; n++) {
                     let printer = out[n].split(' ')[0].trim();
                     this.printers.push(printer);
-                    let printerItem = new PopupMenu.PopupIconMenuItem(printer, 'emblem-documents', St.IconType.SYMBOLIC);
+                    let printerItem = new PopupMenu.PopupIconMenuItem(printer, 'xsi-emblem-documents', St.IconType.SYMBOLIC);
                     if(out2.toString() == printer.toString()) {
-                        printerItem.addActor(new St.Icon({ style_class: 'popup-menu-icon', icon_name: 'emblem-default', icon_type: St.IconType.SYMBOLIC }));
+                        printerItem.addActor(new St.Icon({ style_class: 'popup-menu-icon', icon_name: 'xsi-emblem-default', icon_type: St.IconType.SYMBOLIC }));
                     }
                     printerItem.connect('activate', Lang.bind(printerItem, this.onShowJobsClicked));
                     this.menu.addMenuItem(printerItem);
@@ -163,7 +164,7 @@ class CinnamonPrintersApplet extends Applet.TextIconApplet {
                 Util.spawn_async(['/usr/bin/lpstat', '-o'], Lang.bind(this, function(out) {
                     //Cancel all Jobs
                     if(out.length > 0) {
-                        let cancelAll = new PopupMenu.PopupIconMenuItem(_("Cancel all jobs"), 'edit-delete', St.IconType.SYMBOLIC);
+                        let cancelAll = new PopupMenu.PopupIconMenuItem(_("Cancel all jobs"), 'xsi-edit-delete', St.IconType.SYMBOLIC);
                         cancelAll.connect('activate', Lang.bind(this, this.onCancelAllJobsClicked));
                         this.menu.addMenuItem(cancelAll);
 
@@ -175,7 +176,7 @@ class CinnamonPrintersApplet extends Applet.TextIconApplet {
                     //Cancel Job
                     out = out.split(/\n/);
                     this.jobsCount = out.length - 1;
-                    Util.spawn_async(['/usr/bin/lpq', '-a'], Lang.bind(this, function(out2) {
+                    Util.spawn_async(['/usr/bin/lpstat', '-o'], Lang.bind(this, function(out2) {
                         out2 = out2.replace(/\n/g, ' ').split(/\s+/);
                         let sendJobs = [];
                         for(var n = 0; n < out.length - 1; n++) {
@@ -194,15 +195,15 @@ class CinnamonPrintersApplet extends Applet.TextIconApplet {
                                 doc = doc + '...';
                             }
                             let text = '(' + job + ') ' + _("'%s' on %s").format(doc, printer);
-                            let jobItem = new PopupMenu.PopupIconMenuItem(text, 'edit-delete', St.IconType.SYMBOLIC);
+                            let jobItem = new PopupMenu.PopupIconMenuItem(text, 'xsi-edit-delete', St.IconType.SYMBOLIC);
                             if(out2[out2.indexOf(job) - 2] == 'active') {
-                                jobItem.addActor(new St.Icon({ style_class: 'popup-menu-icon', icon_name: 'emblem-default', icon_type: St.IconType.SYMBOLIC }));
+                                jobItem.addActor(new St.Icon({ style_class: 'popup-menu-icon', icon_name: 'xsi-emblem-default', icon_type: St.IconType.SYMBOLIC }));
                             }
                             jobItem.job = job;
                             jobItem.connect('activate', Lang.bind(jobItem, this.onCancelJobClicked));
                             this.cancelSubMenu.addMenuItem(jobItem);
                             if(out2[out2.indexOf(job) - 2] != 'active' && out2[out2.indexOf(job) - 2] != '1st') {
-                                sendJobs.push(new PopupMenu.PopupIconMenuItem(text, 'go-up', St.IconType.SYMBOLIC));
+                                sendJobs.push(new PopupMenu.PopupIconMenuItem(text, 'xsi-go-up', St.IconType.SYMBOLIC));
                                 sendJobs[sendJobs.length - 1].job = job;
                                 sendJobs[sendJobs.length - 1].connect('activate', Lang.bind(sendJobs[sendJobs.length - 1], this.onSendToFrontClicked));
                             }
@@ -245,11 +246,11 @@ class CinnamonPrintersApplet extends Applet.TextIconApplet {
                                 this.set_applet_tooltip(_("Printers"));
                             }
                             if(this.printWarning) {
-                                this.set_applet_icon_symbolic_name('printer-warning');
+                                this.set_applet_icon_symbolic_name('xsi-printer-warning');
                             } else if(this.jobsCount > 0) {
-                                this.set_applet_icon_symbolic_name('printer-printing');
+                                this.set_applet_icon_symbolic_name('xsi-printer-printing');
                             } else {
-                                this.set_applet_icon_symbolic_name('printer');
+                                this.set_applet_icon_symbolic_name('xsi-printer');
                             }
                         }));
                     }))

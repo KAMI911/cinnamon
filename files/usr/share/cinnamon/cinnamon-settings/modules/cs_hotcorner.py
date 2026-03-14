@@ -5,7 +5,7 @@ import math
 
 from gi.repository import Gio, GLib
 
-from SettingsWidgets import SidePage
+from bin.SettingsWidgets import SidePage
 from xapp.GSettingsWidgets import *
 
 _270_DEG = 270.0 * (math.pi/180.0)
@@ -46,11 +46,14 @@ class Module:
             grid = Gtk.Grid(row_spacing=32, column_spacing=16, halign=Gtk.Align.FILL)
             grid.set_border_width(16)
 
+            fullscreen_switch = GSettingsSwitch(_("Allow hot corners in fullscreen."), "org.cinnamon", "hotcorner-fullscreen")
+
             grid.attach(self.cornerDisplay, 1, 0, 1, 2)
             grid.attach(self.corners[0], 0, 0, 1, 1)
             grid.attach(self.corners[1], 2, 0, 1, 1)
             grid.attach(self.corners[2], 0, 1, 1, 1)
             grid.attach(self.corners[3], 2, 1, 1, 1)
+            grid.attach(fullscreen_switch, 0, 3, 3, 1)
 
             self.sidePage.add_widget(grid)
 
@@ -257,7 +260,7 @@ class HotCornerConfiguration(Gtk.Box):
     def on_widget_changed(self, *args):
         def apply(self):
             iter = self.functionCombo.get_active_iter()
-            if iter != None:
+            if iter is not None:
                 function = self.functionStore.get_value(iter, 0)
                 enabled = self.enableSwitch.get_active()
                 delay = str(int(self.hoverDelaySpinner.get_value()))

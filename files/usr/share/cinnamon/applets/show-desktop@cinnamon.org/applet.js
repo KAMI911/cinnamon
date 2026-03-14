@@ -1,13 +1,18 @@
 const Applet = imports.ui.applet;
 const { AppletSettings } = imports.ui.settings;  // Needed for settings API
 const Mainloop = imports.mainloop;
-const Tweener = imports.ui.tweener;
 const Main = imports.ui.main;
 const PopupMenu = imports.ui.popupMenu;
 const St = imports.gi.St;
 const Clutter = imports.gi.Clutter;
+const Meta = imports.gi.Meta;
 const Lang = imports.lang;
 const SignalManager = imports.misc.signalManager;
+
+const PEEK_TRANSPARENCY_FILTER_TYPES = [
+    Meta.WindowType.DESKTOP,
+    Meta.WindowType.DOCK,
+];
 
 class CinnamonShowDesktopApplet extends Applet.IconApplet {
     constructor(orientation, panel_height, instance_id) {
@@ -49,14 +54,19 @@ class CinnamonShowDesktopApplet extends Applet.IconApplet {
         for(let i = 0; i < windows.length; i++){
             let window = windows[i].meta_window;
             let compositor = windows[i];
-            if(window.get_title() == "Desktop"){
-                Tweener.addTween(compositor, { opacity: 255, time: time, transition: "easeOutSine" });
-            }
+
+            compositor.ease(
+                {
+                    opacity: 255,
+                    transition: Clutter.AnimationMode.EASE_OUT_SINE,
+                    duration: time,
+                }
+            );
+
             if (this.peek_blur && compositor.eff) {
                 compositor.remove_effect(compositor.eff);
             }
         }
-        Tweener.addTween(global.window_group, { opacity: 255, time: time, transition: "easeOutSine" });
     }
 
     _on_enter(event) {
@@ -72,19 +82,29 @@ class CinnamonShowDesktopApplet extends Applet.IconApplet {
                     !this._applet_context_menu.isOpen &&
                     !global.settings.get_boolean("panel-edit-mode")) {
 
-                    Tweener.addTween(global.window_group,
-                                     {opacity: this.peek_opacity, time: 0.275, transition: "easeInSine"});
-
                     let windows = global.get_window_actors();
+
                     for (let i = 0; i < windows.length; i++) {
+                        let window = windows[i].meta_window;
                         let compositor = windows[i];
 
-                        if (this.peek_blur) {
-                            if (!compositor.eff)
-                                compositor.eff = new Clutter.BlurEffect();
-                            compositor.add_effect_with_name('peek-blur', compositor.eff);
+                        if (!PEEK_TRANSPARENCY_FILTER_TYPES.includes(window.get_window_type())) {
+                            if (this.peek_blur) {
+                                if (!compositor.eff)
+                                    compositor.eff = new Clutter.BlurEffect();
+                                compositor.add_effect_with_name('peek-blur', compositor.eff);
+                            }
+
+                            compositor.ease(
+                                {
+                                    opacity: this.peek_opacity / 100 * 255,
+                                    duration: 275,
+                                    transition: Clutter.AnimationMode.EASE_IN_SINE,
+                                }
+                            );
                         }
                     }
+
                     this._did_peek = true;
                 }
                 this._peek_timeout_id = 0;
@@ -95,7 +115,7 @@ class CinnamonShowDesktopApplet extends Applet.IconApplet {
 
     _on_leave(event) {
         if (this._did_peek) {
-            this.show_all_windows(0.2);
+            this.show_all_windows(200);
             this._did_peek = false;
         }
         if (this._peek_timeout_id > 0) {
@@ -105,7 +125,7 @@ class CinnamonShowDesktopApplet extends Applet.IconApplet {
     }
 
     on_applet_clicked(event) {
-        global.screen.toggle_desktop(global.get_current_time());
+        global.workspace_manager.toggle_desktop(global.get_current_time());
         this.show_all_windows(0);
         if (this._peek_timeout_id > 0) {
             Mainloop.source_remove(this._peek_timeout_id);

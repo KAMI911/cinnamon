@@ -22,27 +22,25 @@ import sysconfig
 from gi.repository import Gio, GObject
 
 
-class CManager():
+class CManager:
     def __init__(self):
         self.extension_point = Gio.io_extension_point_register ("cinnamon-control-center-1")
         self.modules = []
 
-        architecture = platform.machine()
         # get the arch-specific triplet, e.g. 'x86_64-linux-gnu' or 'arm-linux-gnueabihf'
         # see also: https://wiki.debian.org/Python/MultiArch
         triplet = sysconfig.get_config_var('MULTIARCH')
-        paths = ["/usr/lib", f"/usr/lib/{triplet}"]
+        paths = ["/usr/lib", "/usr/lib64", f"/usr/lib/{triplet}"]
 
         # On x86 archs, iterate through multiple paths
         # For instance, on a Mint i686 box, the path is actually /usr/lib/i386-linux-gnu
+        architecture = platform.machine()
         x86archs = ["i386", "i486", "i586", "i686"]
         if architecture in x86archs:
             for arch in x86archs:
-                paths += ["/usr/lib/%s" % arch]
-        elif architecture == "x86_64":
-            paths += ["/usr/lib/x86_64", "/usr/lib64"]
+                paths += [f"/usr/lib/{arch}"]
         else:
-            paths += ["/usr/lib/%s" % architecture]
+            paths += [f"/usr/lib/{architecture}"]
 
         for path in paths:
             if not os.path.islink(path):
@@ -51,12 +49,12 @@ class CManager():
                     try:
                         self.modules = self.modules + Gio.io_modules_load_all_in_directory(path)
                     except Exception as e:
-                        print("capi failed to load multiarch modules from %s: " % path, e)
+                        print(f"capi failed to load multiarch modules from {path}: ", e)
 
     def get_c_widget(self, mod_id):
         extension = self.extension_point.get_extension_by_name(mod_id)
         if extension is None:
-            print("Could not load %s module; is the cinnamon-control-center package installed?" % mod_id)
+            print(f"Could not load {mod_id} module; is the cinnamon-control-center package installed?")
             return None
         panel_type = extension.get_type()
         return GObject.new(panel_type)
@@ -64,7 +62,7 @@ class CManager():
     def lookup_c_module(self, mod_id):
         extension = self.extension_point.get_extension_by_name(mod_id)
         if extension is None:
-            print("Could not find %s module; is the cinnamon-control-center package installed?" % mod_id)
+            print(f"Could not find {mod_id} module; is the cinnamon-control-center package installed?")
             return False
         else:
             return True

@@ -20,6 +20,12 @@
         "default": "<Shift><Super>s",
         "tooltip" : "Set keybinding(s) to show the sound applet menu."
     },
+    "alwaysShowMuteInput": {
+        "type": "switch",
+        "description": "Always show input switch",
+        "tooltip": "Always show the 'Mute input' switch in the context menu.",
+        "default": false
+    },
     "_knownPlayers": {
         "type": "generic",
         "default": ["banshee", "vlc", "rhythmbox"]
@@ -55,6 +61,17 @@
         },
         "description": "Action on middle click"
     },
+    "middleShiftClickAction": {
+        "type": "combobox",
+        "default": "in_mute",
+        "options": {
+            "Toggle Mute": "mute",
+            "Toggle Mute output": "out_mute",
+            "Toggle Mute input": "in_mute",
+            "Toggle Play / Pause": "player"
+        },
+        "description": "Action on shift+middle click"
+    },
     "horizontalScroll": {
         "type": "switch",
         "default": false,
@@ -65,12 +82,6 @@
         "type": "switch",
         "default": false,
         "description": "Show album art as icon",
-        "dependency": "playerControl"
-    },
-    "keepAlbumAspectRatio": {
-        "type": "switch",
-        "default": true,
-        "description": "Keep album art aspect ratio",
         "dependency": "playerControl"
     },
     "hideSystray" : {

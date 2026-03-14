@@ -1,43 +1,49 @@
 const Cinnamon = imports.gi.Cinnamon;
 const CMenu = imports.gi.CMenu;
 
-const Util = imports.misc.util;
-
 let appsys = Cinnamon.AppSystem.get_default();
 
-// sort apps by their latinised name
-function appSort(a, b) {
-    a = Util.latinise(a[0].get_name().toLowerCase());
-    b = Util.latinise(b[0].get_name().toLowerCase());
-    return a > b;
+function decomp_string(s) {
+    return s.normalize('NFKD').replace(/\p{Grapheme_Extend}/gu,"").toLowerCase();
 }
 
-// sort cmenu directories with admin and prefs categories last
+function decomp_stripped(s) {
+    return decomp_string(s).replace(/[^\p{L}\p{N}]/gu, "");
+
+}
+
+function decomp_unstripped(s) {
+    return decomp_string(s);
+}
+
+// sort apps by their locale sensitive sort order
+function appSort(a, b) {
+    const an = a[0].get_name();
+    const bn = b[0].get_name();
+
+    return an.localeCompare(bn, undefined, {sensitivity: "base", ignorePunctuation: true});
+}
+
+// sort cmenu directories with special categories at the bottom
 function dirSort(a, b) {
-    let menuIdA = a.get_menu_id().toLowerCase();
-    let menuIdB = b.get_menu_id().toLowerCase();
+    const menuIdA = a.get_menu_id().toLowerCase();
+    const menuIdB = b.get_menu_id().toLowerCase();
 
-    let prefCats = ["administration", "preferences"];
-    let prefIdA = prefCats.indexOf(menuIdA);
-    let prefIdB = prefCats.indexOf(menuIdB);
+    const bottomOrder = ["development", "other", "preferences", "administration"];
 
-    if (prefIdA < 0 && prefIdB >= 0) {
-        return -1;
-    }
-    if (prefIdA >= 0 && prefIdB < 0) {
-        return 1;
-    }
+    const idxA = bottomOrder.indexOf(menuIdA);
+    const idxB = bottomOrder.indexOf(menuIdB);
 
-    let nameA = a.get_name().toLowerCase();
-    let nameB = b.get_name().toLowerCase();
+    // if neither is in the list, sort alphabetically
+    if (idxA < 0 && idxB < 0)
+        return a.get_name().localeCompare(b.get_name(), undefined, {sensitivity: "base", ignorePunctuation: true});
 
-    if (nameA > nameB) {
-        return 1;
-    }
-    if (nameA < nameB) {
-        return -1;
-    }
-    return 0;
+    // if only one is in the list, put it AFTER the other
+    if (idxA < 0) return -1;
+    if (idxB < 0) return 1;
+
+    // if both are in the list, preserve that internal order
+    return idxA - idxB;
 }
 
 /* returns all apps and the categories they belong to, and all top level categories

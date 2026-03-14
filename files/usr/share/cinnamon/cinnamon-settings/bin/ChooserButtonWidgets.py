@@ -1,21 +1,29 @@
 #!/usr/bin/python3
 
 from gi.repository import Gtk, GObject, GLib, Gdk, GdkPixbuf, Gio
-import cairo
 import os
 import gettext
 import datetime
 gettext.install("cinnamon", "/usr/share/locale")
 
 class BaseChooserButton(Gtk.Button):
-    def __init__ (self, has_button_label=False):
+    def __init__ (self, has_button_label=False, frame=False):
         super(BaseChooserButton, self).__init__()
+        self.has_button_label = has_button_label
+        self.frame = frame
         self.set_valign(Gtk.Align.CENTER)
         self.menu = Gtk.Menu()
         self.button_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         self.button_image = Gtk.Image()
-        self.button_box.add(self.button_image)
-        if has_button_label:
+
+        if self.frame:
+            f = Gtk.Frame(valign=Gtk.Align.END, halign=Gtk.Align.CENTER)
+            f.add(self.button_image)
+            self.button_box.add(f)
+        else:
+            self.button_box.add(self.button_image)
+
+        if self.has_button_label:
             self.button_label = Gtk.Label()
             self.button_box.add(self.button_label)
         self.add(self.button_box)
@@ -50,7 +58,7 @@ class BaseChooserButton(Gtk.Button):
             y = y + ((window_y + wrect.y + wrect.height) - (y + mrect.height))
 
         push_in = True # push_in is True so all menu is always inside screen
-        return (x, y, push_in)
+        return x, y, push_in
 
     def _on_button_clicked(self, widget, event):
         if event.button == 1:
@@ -58,12 +66,12 @@ class BaseChooserButton(Gtk.Button):
             self.menu.popup(None, None, self.popup_menu_below_button, self, event.button, event.time)
 
 class PictureChooserButton(BaseChooserButton):
-    def __init__ (self, num_cols=4, button_picture_size=24, menu_pictures_size=24, has_button_label=False, keep_square=False):
-        super(PictureChooserButton, self).__init__(has_button_label)
+    def __init__ (self, num_cols=4, button_picture_width=24, menu_picture_width=24, has_button_label=False, keep_square=False, frame=False):
+        super(PictureChooserButton, self).__init__(has_button_label, frame)
         self.num_cols = num_cols
         self.scale = self.get_scale_factor()
-        self.button_picture_size = button_picture_size
-        self.menu_pictures_size = menu_pictures_size
+        self.button_picture_width = button_picture_width
+        self.menu_picture_width = menu_picture_width
         self.keep_square = keep_square
         self.row = 0
         self.col = 0
@@ -74,9 +82,9 @@ class PictureChooserButton(BaseChooserButton):
 
         self.button_image.set_valign(Gtk.Align.CENTER)
         if self.keep_square:
-            self.button_image.set_size_request(button_picture_size / self.scale, button_picture_size / self.scale)
+            self.button_image.set_size_request(button_picture_width / self.scale, button_picture_width / self.scale)
         else:
-            self.button_image.set_size_request(-1, button_picture_size / self.scale)
+            self.button_image.set_size_request(button_picture_width / self.scale, -1)
 
         self.connect_after("draw", self.on_draw)
 
@@ -113,43 +121,28 @@ class PictureChooserButton(BaseChooserButton):
         self.progress = 0.0
         self.queue_draw()
 
+    def create_scaled_surface(self, path):
+        w = self.button_picture_width * self.scale
+        h = -1 if not self.keep_square else self.button_picture_width * self.scale
+
+        try:
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(path, w, h)
+            if pixbuf:
+                return Gdk.cairo_surface_create_from_pixbuf(pixbuf, self.scale)
+        except GLib.Error as e:
+            print(f"Could not load thumbnail file '{path}': {e.message}")
+        return None
+
     def set_picture_from_file (self, path):
-        pixbuf = None
-        message = ""
-
-        if os.path.exists(path):
-            try:
-                pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
-            except GLib.Error as e:
-                message = "Could not load pixbuf from '%s': %s" % (path, e.message)
-                error = True
-
-            if pixbuf != None:
-                h = pixbuf.get_height()
-                w = pixbuf.get_width()
-
-                if (self.keep_square and (h > self.button_picture_size or w > self.button_picture_size)):
-                    try:
-                        pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(path, self.button_picture_size * self.scale, self.button_picture_size * self.scale)
-                    except GLib.Error as e:
-                        message = "Could not scale pixbuf from '%s': %s" % (path, e.message)
-                        error = True
-                elif h > self.button_picture_size:
-                    try:
-                        pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(path, -1, self.button_picture_size * self.scale)
-                    except GLib.Error as e:
-                        message = "Could not scale pixbuf from '%s': %s" % (path, e.message)
-                        error = True
-
-        if pixbuf:
-            surface = Gdk.cairo_surface_create_from_pixbuf(pixbuf, self.scale)
+        surface = self.create_scaled_surface(path)
+        if surface:
             self.button_image.set_from_surface(surface)
         else:
-            print(message)
-            self.set_picture_from_file("/usr/share/cinnamon/faces/user-generic.png")
+            self.button_image.set_from_icon_name("user-generic", Gtk.IconSize.BUTTON)
 
     def set_button_label(self, label):
-        self.button_label.set_markup(label)
+        if self.has_button_label:
+            self.button_label.set_markup(label)
 
     def _on_picture_selected(self, menuitem, path, callback, id=None):
         if id is not None:
@@ -168,59 +161,68 @@ class PictureChooserButton(BaseChooserButton):
         menu.destroy()
 
     def add_picture(self, path, callback, title=None, id=None):
-        pixbuf = None
-        if os.path.exists(path):
-            try:
-                pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
-            except GLib.Error as e:
-                message = "Could not load pixbuf from '%s': %s" % (path, e.message)
-                error = True
+        image = Gtk.Image()
+        image.set_size_request(self.menu_picture_width / self.scale, -1)
 
-            if pixbuf != None:
-                h = pixbuf.get_height()
-                w = pixbuf.get_width()
+        surface = self.create_scaled_surface(path)
 
-                try:
-                    if self.menu_pictures_size is None:
-                        pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(path, w, h)
-                    else:
-                        pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(path, -1, self.menu_pictures_size)
-                except GLib.Error as e:
-                    print('Caught GLib.Error exception: {}\npath: {}'.format(e, str(path)))
+        if surface:
+            image.set_from_surface(surface)
+        else:
+            image.set_from_icon_name("user-generic", Gtk.IconSize.BUTTON)
 
-                if pixbuf is None:
-                    return
+        if self.frame:
+            frame = Gtk.Frame(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER)
+            frame.add(image)
+            menu_image = frame
+        else:
+            menu_image = image
 
-                surface = Gdk.cairo_surface_create_from_pixbuf(pixbuf, self.scale)
-                image = Gtk.Image()
-                image.set_size_request(self.menu_pictures_size / self.scale, self.menu_pictures_size / self.scale)
-                image.set_from_surface(surface)
-                menuitem = Gtk.MenuItem()
-                if title is not None:
-                    vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-                    vbox.add(image)
-                    label = Gtk.Label()
-                    label.set_text(title)
-                    vbox.add(label)
-                    menuitem.add(vbox)
-                else:
-                    menuitem.add(image)
-                if id is not None:
-                    menuitem.connect('activate', self._on_picture_selected, path, callback, id)
-                else:
-                    menuitem.connect('activate', self._on_picture_selected, path, callback)
-                self.menu.attach(menuitem, self.col, self.col+1, self.row, self.row+1)
-                self.col = (self.col+1) % self.num_cols
-                if (self.col == 0):
-                    self.row = self.row + 1
+        menuitem = Gtk.MenuItem()
+        if title is not None:
+            vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, valign=Gtk.Align.END)
+            vbox.add(menu_image)
+            label = Gtk.Label()
+            label.set_text(title)
+            vbox.add(label)
+            menuitem.add(vbox)
+        else:
+            menuitem.add(menu_image)
+        if id is not None:
+            menuitem.connect('activate', self._on_picture_selected, path, callback, id)
+        else:
+            menuitem.connect('activate', self._on_picture_selected, path, callback)
+        self.menu.attach(menuitem, self.col, self.col+1, self.row, self.row+1)
+        self.col = (self.col+1) % self.num_cols
+        if self.col == 0:
+            self.row = self.row + 1
 
-    def add_separator(self):
+    def add_separator(self, label_text=None):
+        if self.col > 0:
+            self.row = self.row + 1
+            self.col = 0
+
+        if label_text is not None:
+            item = Gtk.MenuItem()
+            item.set_sensitive(False)
+            # Add centered, bold label
+            label = Gtk.Label()
+            label.set_markup(f"<b>{label_text}</b>")
+            label.set_halign(Gtk.Align.START)
+            item.add(label)
+        else:
+            item = Gtk.SeparatorMenuItem()
+
+        self.menu.attach(item, 0, self.num_cols, self.row, self.row + 1)
         self.row = self.row + 1
-        self.menu.attach(Gtk.SeparatorMenuItem(), 0, self.num_cols, self.row, self.row+1)
 
     def add_menuitem(self, menuitem):
-        self.row = self.row + 1
+        if self.col > 0:
+            self.row = self.row + 1
+            self.col = 0
+
         self.menu.attach(menuitem, 0, self.num_cols, self.row, self.row+1)
+        self.row = self.row + 1
 
 class DateChooserButton(Gtk.Button):
     __gsignals__ = {
@@ -406,7 +408,7 @@ class TimeChooserDialog(Gtk.Dialog):
         self.time = {'hour': time.hour, 'minute': time.minute, 'second': time.second}
         self.use_seconds = use_seconds
         self.use24hour = use24hour
-        self.markup = lambda text: '<span weight="bold" size="xx-large">%s</span>' % text
+        self.markup = lambda text: f'<span weight="bold" size="xx-large">{text}</span>'
 
         content = self.get_content_area()
 
@@ -429,10 +431,10 @@ class TimeChooserDialog(Gtk.Dialog):
             self.labels[ttype] = Gtk.Label(self.markup(self.time[ttype]), use_markup=True)
             grid.attach(self.labels[ttype], column, 2, 1, 1)
 
-            up_button = Gtk.Button.new_from_icon_name('pan-up-symbolic', 6)
-            down_button = Gtk.Button.new_from_icon_name('pan-down-symbolic', 6)
-            up_button.set_relief(2)
-            down_button.set_relief(2)
+            up_button = Gtk.Button.new_from_icon_name('xsi-pan-up-symbolic', Gtk.IconSize.DIALOG)
+            down_button = Gtk.Button.new_from_icon_name('xsi-pan-down-symbolic', Gtk.IconSize.DIALOG)
+            up_button.set_relief(Gtk.ReliefStyle.NONE)
+            down_button.set_relief(Gtk.ReliefStyle.NONE)
             grid.attach(up_button, column, 1, 1, 1)
             grid.attach(down_button, column, 3, 1, 1)
             up_button.connect('clicked', self.shift_time, ttype, 1)

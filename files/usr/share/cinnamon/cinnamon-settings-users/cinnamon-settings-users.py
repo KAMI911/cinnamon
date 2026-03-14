@@ -84,7 +84,7 @@ class GroupDialog (Gtk.Dialog):
     def _on_entry_changed(self, entry):
         name = entry.get_text()
         if " " in name or name.lower() != name:
-            entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "dialog-warning-symbolic")
+            entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "xsi-dialog-warning-symbolic")
             entry.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, _("The group name cannot contain upper-case or space characters"))
             self.set_response_sensitive(Gtk.ResponseType.OK, False)
         else:
@@ -104,7 +104,7 @@ class DimmedTable (Gtk.Table):
     def add_labels(self, texts):
         row = 0
         for text in texts:
-            if text != None:
+            if text is not None:
                 label = Gtk.Label(text)
                 label.set_alignment(1, 0.5)
                 label.get_style_context().add_class("dim-label")
@@ -121,7 +121,7 @@ class DimmedTable (Gtk.Table):
 class EditableEntry (Gtk.Notebook):
 
     __gsignals__ = {
-        'changed': (GObject.SIGNAL_RUN_FIRST, None,
+        'changed': (GObject.SignalFlags.RUN_FIRST, None,
                     (str,))
     }
 
@@ -137,8 +137,8 @@ class EditableEntry (Gtk.Notebook):
 
         self.button.set_alignment(0.0, 0.5)
         self.button.set_relief(Gtk.ReliefStyle.NONE)
-        self.append_page(self.button, None);
-        self.append_page(self.entry, None);
+        self.append_page(self.button, None)
+        self.append_page(self.entry, None)
         self.set_current_page(0)
         self.set_show_tabs(False)
         self.set_show_border(False)
@@ -165,7 +165,7 @@ class EditableEntry (Gtk.Notebook):
         self.button.set_label(entry.get_text())
 
     def set_editable(self, editable):
-        if (editable):
+        if editable:
             self.set_current_page(EditableEntry.PAGE_ENTRY)
         else:
             self.set_current_page(EditableEntry.PAGE_BUTTON)
@@ -198,7 +198,7 @@ class PasswordDialog(Gtk.Dialog):
         table.add_labels([_("New password"), None, _("Confirm password")])
 
         self.new_password = Gtk.Entry()
-        self.new_password.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "view-refresh-symbolic")
+        self.new_password.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "xsi-view-refresh-symbolic")
         self.new_password.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, _("Generate a password"))
         self.new_password.connect("icon-release", self._on_new_password_icon_released)
         self.new_password.connect("changed", self._on_passwords_changed)
@@ -320,7 +320,7 @@ class PasswordDialog(Gtk.Dialog):
         confirm_password = self.confirm_password.get_text()
         strength = self.password_strength(new_password)
         if new_password != confirm_password:
-            self.confirm_password.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "dialog-warning-symbolic")
+            self.confirm_password.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "xsi-dialog-warning-symbolic")
             self.confirm_password.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, _("Passwords do not match"))
         else:
             self.confirm_password.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, None)
@@ -374,9 +374,6 @@ class NewUserDialog(Gtk.Dialog):
             self.username_entry = Gtk.Entry()
             self.username_entry.connect("changed", self._on_info_changed)
 
-            label = Gtk.Label()
-            label.set_markup(_("The username must consist of only:\n    - lower case letters (a-z)\n    - numerals (0-9)\n    - '.', '-', and '_' characters"))
-
             table = DimmedTable()
             table.add_labels([_("Account Type"), _("Full Name"), _("Username")])
             table.add_controls([self.account_type_combo, self.realname_entry, self.username_entry])
@@ -385,7 +382,6 @@ class NewUserDialog(Gtk.Dialog):
 
             box = self.get_content_area()
             box.add(table)
-            box.add(label)
             self.show_all()
 
             self.add_buttons(_("Cancel"), Gtk.ResponseType.CANCEL, _("Add"), Gtk.ResponseType.OK, )
@@ -407,12 +403,12 @@ class NewUserDialog(Gtk.Dialog):
         fullname = self.realname_entry.get_text()
         username = self.username_entry.get_text()
         valid = True
-        if re.search('[^a-z0-9_.-]', username):
-            self.username_entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "dialog-warning-symbolic")
+        if re.search('[^a-z0-9_-]', username):
+            self.username_entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "xsi-dialog-warning-symbolic")
             self.username_entry.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, _("Invalid username"))
             valid = False
         elif self.user_exists(username):
-            self.username_entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "dialog-warning-symbolic")
+            self.username_entry.set_icon_from_icon_name(Gtk.EntryIconPosition.SECONDARY, "xsi-dialog-warning-symbolic")
             self.username_entry.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, _("A user with the name '%s' already exists.") % username)
             valid = False
         else:
@@ -555,7 +551,7 @@ class Module:
                         menuitem.connect('activate', self._on_face_menuitem_activated, path)
                         self.menu.attach(menuitem, col, col+1, row, row+1)
                         col = (col+1) % num_cols
-                        if (col == 0):
+                        if col == 0:
                             row = row + 1
 
             row = row + 1
@@ -615,14 +611,14 @@ class Module:
 
     def _on_password_button_clicked(self, widget):
         model, treeiter = self.users_treeview.get_selection().get_selected()
-        if treeiter != None:
+        if treeiter is not None:
             user = model[treeiter][INDEX_USER_OBJECT]
             dialog = PasswordDialog(user, self.password_mask, self.groups_label, self.window)
             response = dialog.run()
 
     def _on_groups_button_clicked(self, widget):
         model, treeiter = self.users_treeview.get_selection().get_selected()
-        if treeiter != None:
+        if treeiter is not None:
             user = model[treeiter][INDEX_USER_OBJECT]
             dialog = GroupsDialog(user.get_user_name(), self.window)
             response = dialog.run()
@@ -635,7 +631,7 @@ class Module:
 
     def _on_accounttype_changed(self, combobox):
         model, treeiter = self.users_treeview.get_selection().get_selected()
-        if treeiter != None:
+        if treeiter is not None:
             user = model[treeiter][INDEX_USER_OBJECT]
             if self.account_type_combo.get_active() == 1:
                 user.set_account_type(AccountsService.UserAccountType.ADMINISTRATOR)
@@ -671,15 +667,15 @@ class Module:
 
     def _on_realname_changed(self, widget, text):
         model, treeiter = self.users_treeview.get_selection().get_selected()
-        if treeiter != None:
+        if treeiter is not None:
             user = model[treeiter][INDEX_USER_OBJECT]
             user.set_real_name(text)
-            description = "<b>%s</b>\n%s" % (text, user.get_user_name())
+            description = "<b>%s</b>\n%s" % (GLib.markup_escape_text(text), GLib.markup_escape_text(user.get_user_name()))
             model.set_value(treeiter, INDEX_USER_DESCRIPTION, description)
 
     def _on_face_browse_menuitem_activated(self, menuitem):
         model, treeiter = self.users_treeview.get_selection().get_selected()
-        if treeiter != None:
+        if treeiter is not None:
             user = model[treeiter][INDEX_USER_OBJECT]
             dialog = Gtk.FileChooserDialog(None, None, Gtk.FileChooserAction.OPEN, (_("Cancel"), Gtk.ResponseType.CANCEL, _("Open"), Gtk.ResponseType.OK))
             filter = Gtk.FileFilter()
@@ -707,7 +703,7 @@ class Module:
             if response == Gtk.ResponseType.OK:
                 path = dialog.get_filename()
                 image = PIL.Image.open(path)
-                image.thumbnail((96, 96), Image.ANTIALIAS)
+                image.thumbnail((96, 96), Image.LANCZOS)
                 face_path = os.path.join(user.get_home_dir(), ".face")
                 try:
                     try:
@@ -746,7 +742,7 @@ class Module:
     def _on_face_menuitem_activated(self, menuitem, path):
         if os.path.exists(path):
             model, treeiter = self.users_treeview.get_selection().get_selected()
-            if treeiter != None:
+            if treeiter is not None:
                 user = model[treeiter][INDEX_USER_OBJECT]
                 user.set_icon_file(path)
                 self.face_image.set_from_file(path)
@@ -788,7 +784,7 @@ class Module:
         y += widget.get_allocation().height
 
         push_in = True # push_in is True so all menu is always inside screen
-        return (x, y, push_in)
+        return x, y, push_in
 
     def on_accounts_service_loaded(self, user, param):
         self.load_users()
@@ -801,7 +797,10 @@ class Module:
                 pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(user.get_icon_file(), 48, 48)
             else:
                 pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size("/usr/share/cinnamon/faces/user-generic.png", 48, 48)
-            description = "<b>%s</b>\n%s" % (user.get_real_name(), user.get_user_name())
+
+            real_name = GLib.markup_escape_text(user.get_real_name())
+            user_name = GLib.markup_escape_text(user.get_user_name())
+            description = f"<b>{real_name}</b>\n{user_name}"
             piter = self.users.append(None, [user, pixbuf, description])
         self.users_treeview.set_model(self.users)
 
@@ -820,7 +819,7 @@ class Module:
         self.password_button.set_tooltip_text("")
 
         model, treeiter = selection.get_selected()
-        if treeiter != None:
+        if treeiter is not None:
             user = model[treeiter][INDEX_USER_OBJECT]
             self.builder.get_object("button_delete_user").set_sensitive(True)
             self.realname_entry.set_text(user.get_real_name())
@@ -859,7 +858,7 @@ class Module:
                     message = "Could not load pixbuf from '%s': %s" % (path, e.message)
                     error = True
 
-                if pixbuf != None:
+                if pixbuf is not None:
                     if pixbuf.get_height() > 96 or pixbuf.get_width() > 96:
                         try:
                             pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(path, 96, 96)
@@ -878,7 +877,7 @@ class Module:
             self.builder.get_object("box_users").show()
 
             # Count the number of connections for the currently logged-in user
-            connections = int(subprocess.check_output(["w", "-hs", user.get_user_name()]).decode("utf-8").count("\n"))
+            connections = int(subprocess.check_output(["w", "-h", user.get_user_name()]).decode("utf-8").count("\n"))
             if connections > 0:
                 self.builder.get_object("button_delete_user").set_sensitive(False)
                 self.builder.get_object("button_delete_user").set_tooltip_text(_("This user is currently logged in"))
@@ -896,7 +895,7 @@ class Module:
 
     def on_user_deletion(self, event):
         model, treeiter = self.users_treeview.get_selection().get_selected()
-        if treeiter != None:
+        if treeiter is not None:
             user = model[treeiter][INDEX_USER_OBJECT]
             message = _("Are you sure you want to permanently delete %s and all the files associated with this user?") % user.get_user_name()
             d = Gtk.MessageDialog(self.window,
@@ -933,7 +932,7 @@ class Module:
             new_user = self.accountService.create_user(username, fullname, account_type)
             new_user.set_password_mode(AccountsService.UserPasswordMode.NONE)
             pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size("/usr/share/cinnamon/faces/user-generic.png", 48, 48)
-            description = "<b>%s</b>\n%s" % (fullname, username)
+            description = "<b>%s</b>\n%s" % (GLib.markup_escape_text(fullname), GLib.markup_escape_text(username))
             piter = self.users.append(None, [new_user, pixbuf, description])
             # Add the user to his/her own group and sudo if Administrator was selected
             if dialog.account_type_combo.get_active() == 1:
@@ -949,14 +948,14 @@ class Module:
 
     def on_user_edition(self, event):
         model, treeiter = self.users_treeview.get_selection().get_selected()
-        if treeiter != None:
+        if treeiter is not None:
             print("Editing user %s" % model[treeiter][INDEX_USER_OBJECT].get_user_name())
 
 # GROUPS CALLBACKS
 
     def on_group_selection(self, selection):
         model, treeiter = selection.get_selected()
-        if treeiter != None:
+        if treeiter is not None:
             self.builder.get_object("button_edit_group").set_sensitive(True)
             self.builder.get_object("button_delete_group").set_sensitive(True)
             self.builder.get_object("button_delete_group").set_tooltip_text("")
@@ -976,7 +975,7 @@ class Module:
 
     def on_group_deletion(self, event):
         model, treeiter = self.groups_treeview.get_selection().get_selected()
-        if treeiter != None:
+        if treeiter is not None:
             group = model[treeiter][INDEX_GROUPNAME]
             message = _("Are you sure you want to permanently delete %s?") % group
             d = Gtk.MessageDialog(self.window,
@@ -1002,7 +1001,7 @@ class Module:
 
     def on_group_edition(self, event):
         model, treeiter = self.groups_treeview.get_selection().get_selected()
-        if treeiter != None:
+        if treeiter is not None:
             group = model[treeiter][INDEX_GROUPNAME]
             dialog = GroupDialog(_("Group Name"), group, self.window)
             response = dialog.run()

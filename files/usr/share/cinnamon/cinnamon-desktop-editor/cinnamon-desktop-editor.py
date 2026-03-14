@@ -8,6 +8,7 @@ from optparse import OptionParser
 import shutil
 import subprocess
 from setproctitle import setproctitle
+from pathlib import Path
 
 import gi
 gi.require_version("Gtk", "3.0")
@@ -17,8 +18,8 @@ from gi.repository import GLib, Gtk, Gio, CMenu
 sys.path.insert(0, '/usr/share/cinnamon/cinnamon-menu-editor')
 from cme import util
 
-sys.path.insert(0, '/usr/share/cinnamon/cinnamon-settings/bin')
-import JsonSettingsWidgets
+sys.path.insert(0, '/usr/share/cinnamon/cinnamon-settings')
+from bin import JsonSettingsWidgets
 
 # i18n
 gettext.install("cinnamon", "/usr/share/locale")
@@ -26,14 +27,15 @@ gettext.install("cinnamon", "/usr/share/locale")
 
 #_ = gettext.gettext # bug !!! _ is already defined by gettext.install!
 home = os.path.expanduser("~")
-PANEL_LAUNCHER_PATH = os.path.join(home, ".cinnamon", "panel-launchers")
+PANEL_LAUNCHER_PATH = os.path.join(GLib.get_user_data_dir(), "cinnamon", "panel-launchers")
+OLD_PANEL_LAUNCHER_PATH = os.path.join(home, ".cinnamon", "panel-launchers")
 
 EXTENSIONS = (".png", ".xpm", ".svg")
 
 DEFAULT_ICON_NAME = "cinnamon-panel-launcher"
 
 def escape_space(string):
-    return string.replace(" ", "\ ")
+    return string.replace(" ", r"\ ")
 
 
 def ask(msg):
@@ -55,7 +57,7 @@ DESKTOP_GROUP = GLib.KEY_FILE_DESKTOP_GROUP
 class ItemEditor(object):
     ui_file = None
 
-    def __init__(self, item_path=None, callback=None, destdir=None):
+    def __init__(self, item_path=None, callback=None, destdir=None, icon_size=24):
         self.builder = Gtk.Builder()
         self.builder.set_translation_domain('cinnamon') # let it translate!
         self.builder.add_from_file(self.ui_file)
@@ -65,8 +67,12 @@ class ItemEditor(object):
 
         self.dialog.connect('response', self.on_response)
 
+        self.starting_icon = None
         self.icon_chooser = self.builder.get_object('icon-chooser')
         self.icon_chooser.get_dialog().set_property("allow-paths", True)
+
+        self.icon_size = icon_size
+        self.icon_chooser.set_icon_size(self.get_gtk_size_for_pixels(icon_size))
 
         self.build_ui()
 
@@ -74,6 +80,18 @@ class ItemEditor(object):
         self.load()
         self.check_custom_path()
         self.resync_validity()
+
+    def get_gtk_size_for_pixels(self, icon_size):
+        i = 0
+        while True:
+            try:
+                valid, width, height = Gtk.IconSize.lookup(Gtk.IconSize(i))
+                if height > icon_size:
+                    return Gtk.IconSize(i)
+            except ValueError:
+                return Gtk.IconSize.DIALOG
+
+            i += 1
 
     def build_ui(self):
         raise NotImplementedError()
@@ -116,7 +134,7 @@ class ItemEditor(object):
 
     def set_text(self, ctl, name):
         try:
-            val = self.keyfile.get_string(DESKTOP_GROUP, name)
+            val = self.keyfile.get_locale_string(DESKTOP_GROUP, name, None)
         except GLib.GError:
             pass
         else:
@@ -138,6 +156,7 @@ class ItemEditor(object):
         else:
             print(val)
             self.icon_chooser.set_icon(val)
+            self.starting_icon = val
             print('icon:', self.icon_chooser.get_icon())
 
     def load(self):
@@ -177,8 +196,6 @@ class ItemEditor(object):
             self.callback(True, self.item_path)
         else:
             self.callback(False, self.item_path)
-        self.dialog.destroy()
-
 
 class LauncherEditor(ItemEditor):
     ui_file = '/usr/share/cinnamon/cinnamon-desktop-editor/launcher-editor.ui'
@@ -202,6 +219,7 @@ class LauncherEditor(ItemEditor):
         self.set_text('exec-entry', "Exec")
         self.set_text('comment-entry', "Comment")
         self.set_check('terminal-check', "Terminal")
+        self.set_check('offload-gpu-check', "PrefersNonDefaultGPU")
         self.set_icon("Icon")
 
     def get_keyfile_edits(self):
@@ -209,6 +227,7 @@ class LauncherEditor(ItemEditor):
                     Exec=self.builder.get_object('exec-entry').get_text(),
                     Comment=self.builder.get_object('comment-entry').get_text(),
                     Terminal=self.builder.get_object('terminal-check').get_active(),
+                    PrefersNonDefaultGPU=self.builder.get_object("offload-gpu-check").get_active(),
                     Icon=self.icon_chooser.get_icon(),
                     Type="Application")
 
@@ -270,8 +289,10 @@ class CinnamonLauncherEditor(ItemEditor):
             i = 1
             while True:
                 name = os.path.join(PANEL_LAUNCHER_PATH, 'cinnamon-custom-launcher-' + str(i) + '.desktop')
+                old_name = os.path.join(OLD_PANEL_LAUNCHER_PATH, 'cinnamon-custom-launcher-' + str(i) + '.desktop')
                 file = Gio.file_parse_name(name)
-                if not file.query_exists(None):
+                old_file = Gio.file_parse_name(old_name)
+                if not file.query_exists(None) and not old_file.query_exists(None):
                     break
                 i += 1
             self.item_path = name
@@ -289,15 +310,41 @@ class CinnamonLauncherEditor(ItemEditor):
         self.set_text('exec-entry', "Exec")
         self.set_text('comment-entry', "Comment")
         self.set_check('terminal-check', "Terminal")
+        self.set_check('offload-gpu-check', "PrefersNonDefaultGPU")
         self.set_icon("Icon")
 
     def get_keyfile_edits(self):
+        icon_theme = Gtk.IconTheme.get_default()
+        icon = self.icon_chooser.get_icon()
+
+        if icon != self.starting_icon:
+            info = icon_theme.lookup_icon(icon, self.icon_size, 0)
+            if info:
+                filename = info.get_filename()
+                if not self.in_hicolor(filename):
+                    icon = filename
+
         return dict(Name=self.builder.get_object('name-entry').get_text(),
                     Exec=self.builder.get_object('exec-entry').get_text(),
                     Comment=self.builder.get_object('comment-entry').get_text(),
                     Terminal=self.builder.get_object('terminal-check').get_active(),
-                    Icon=self.icon_chooser.get_icon(),
+                    PrefersNonDefaultGPU=self.builder.get_object("offload-gpu-check").get_active(),
+                    Icon=icon,
                     Type="Application")
+
+    def in_hicolor(self, path):
+        datadirs = GLib.get_system_data_dirs()
+
+        for datadir in datadirs:
+            hicolor_folder = Path(os.path.join(datadir, "icons", "hicolor"))
+            icon_path = Path(path)
+            try:
+                if icon_path.relative_to(hicolor_folder) is not None:
+                    return True
+            except ValueError:
+                pass
+
+        return False
 
     def pick_exec(self, button):
         chooser = Gtk.FileChooserDialog(title=_("Choose a command"),
@@ -317,6 +364,7 @@ class Main:
         parser.add_option("-d", "--directory", dest="destination_directory", help="Destination directory of the new launcher", metavar="DEST_DIR")
         parser.add_option("-f", "--file", dest="desktop_file", help="Name of desktop file (i.e. gnome-terminal.desktop)", metavar="DESKTOP_NAME")
         parser.add_option("-m", "--mode", dest="mode", default=None, help="Mode to run in: launcher, directory, panel-launcher or nemo-launcher")
+        parser.add_option("-i", "--icon-size", dest="icon_size", type=int, default=24, help="Size to set the icon picker for (panel-launcher only)")
         (options, args) = parser.parse_args()
 
         if not options.mode:
@@ -340,6 +388,7 @@ class Main:
 
         if options.mode == "cinnamon-launcher":
             self.json_path = args[0]
+            self.icon_size = options.icon_size
 
         if self.desktop_file is not None:
             self.get_desktop_path()
@@ -351,7 +400,7 @@ class Main:
             editor = LauncherEditor(self.orig_file, self.launcher_cb)
             editor.dialog.show_all()
         elif self.mode == "cinnamon-launcher":
-            editor = CinnamonLauncherEditor(self.orig_file, self.panel_launcher_cb)
+            editor = CinnamonLauncherEditor(self.orig_file, self.panel_launcher_cb, icon_size=self.icon_size)
             editor.dialog.show_all()
         elif self.mode == "nemo-launcher":
             editor = LauncherEditor(self.orig_file, self.nemo_launcher_cb, self.dest_dir)
@@ -395,7 +444,8 @@ class Main:
         self.search_menu_sys()
         if self.orig_file is None:
             panel_launchers = glob.glob(os.path.join(PANEL_LAUNCHER_PATH, "*.desktop"))
-            for launcher in panel_launchers:
+            old_panel_launchers = glob.glob(os.path.join(OLD_PANEL_LAUNCHER_PATH, "*.desktop"))
+            for launcher in (panel_launchers + old_panel_launchers):
                 if os.path.split(launcher)[1] == self.desktop_file:
                     self.orig_file = launcher
 

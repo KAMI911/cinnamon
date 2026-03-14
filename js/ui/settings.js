@@ -579,13 +579,18 @@ XletSettingsBase.prototype = {
         }
     },
 
+
+    /**
+     * _checkSettings:
+     *
+     * Checks whether any settings have been changed and handles callbacks/signals if they have.
+     */
     _checkSettings: function() {
         let oldSettings = this.settingsData;
         try {
             this.settingsData = this._loadFromFile();
         } catch(e) {
-            // looks like we're getting a premature signal from the file monitor
-            // we should get another when the file is finished writing
+            global.logError(e);
             return;
         }
 
@@ -593,14 +598,18 @@ XletSettingsBase.prototype = {
         for (let key in this.settingsData) {
             if (!this.settingsData[key]
                 || this.settingsData[key].value === undefined
+                || this.settingsData[key].type === undefined
                 || !oldSettings[key]
                 || oldSettings[key].value === undefined) continue;
 
             let oldValue = oldSettings[key].value;
             let value = this.settingsData[key].value;
-            if (value == oldValue) continue;
+            let valueType = this.settingsData[key].type;
 
+            if (!this._hasSettingChanged(value, valueType, oldValue)) continue;
+            
             changed = true;
+
             if (key in this.bindings) {
                 for (let info of this.bindings[key]) {
                     // if the property had a save function, it is gone now and we need to re-add it
@@ -631,6 +640,49 @@ XletSettingsBase.prototype = {
         if (changed) {
             this.emit("settings-changed");
         }
+    },
+
+    /**
+     * _hasSettingChanged:
+     * @value: current value
+     * @valueType: current value setting type
+     * @oldValue: previous value
+     *
+     * Checks whether a setting has changed by comparing is current value to the previous one
+     */
+    _hasSettingChanged: function(value, valueType, oldValue) {
+        // It's easy to evaluate whether strings or ints changes, but
+        // some settings are objects in such case every property needs to be checked 
+        
+        let equal = false;
+        if (valueType === "timechooser" || valueType === "datechooser") {
+
+            equal = Object.keys(value).every(
+                key => oldValue.hasOwnProperty(key)
+                && value[key] === oldValue[key]);
+
+        } else if (valueType === "list") { 
+
+            // If lists differ in length they definitely changed
+            if (value.length !== oldValue.length) return true;
+
+            // Each row of the list needs to be checked
+            equal = Object.keys(value).every(row => {
+                if (value[row].length === oldValue[row].length) {
+                    return Object.keys(value[row]).every(
+                        key => oldValue[row].hasOwnProperty(key)
+                        && value[row][key] === oldValue[row][key]
+                    );
+                } else {
+                    return false;
+                }
+            });    
+              
+        } else {
+            equal = (value === oldValue);
+        }
+            
+        return !equal;
     },
 
     _loadTemplate: function(checksum) {
@@ -689,11 +741,20 @@ XletSettingsBase.prototype = {
     },
 
     _ensureSettingsFiles: function() {
-        let configPath = [GLib.get_home_dir(), ".cinnamon", "configs", this.uuid].join("/");
+        let configPath = [GLib.get_user_config_dir(), "cinnamon", "spices", this.uuid].join("/");
         let configDir = Gio.file_new_for_path(configPath);
         if (!configDir.query_exists(null)) configDir.make_directory_with_parents(null);
-        this.file = configDir.get_child(this.instanceId + ".json");
-        this.monitor = this.file.monitor_file(Gio.FileMonitorFlags.NONE, null);
+
+        let configFile = configDir.get_child(this.instanceId + ".json")
+
+        let oldConfigDir = Gio.file_new_for_path([GLib.get_home_dir(), ".cinnamon", "configs", this.uuid].join("/"));
+        let oldConfigFile = oldConfigDir.get_child(this.instanceId + ".json");
+
+        // We only use the config under the old path if it's the only one for backwards compatibility
+        if (oldConfigFile.query_exists(null) && !configFile.query_exists(null))
+            this.file = oldConfigFile;
+        else 
+            this.file = configFile;
 
         // If the settings have already been installed previously we need to check if the schema
         // has changed and if so, do an upgrade
@@ -740,8 +801,6 @@ XletSettingsBase.prototype = {
 
             this._saveToFile();
         }
-
-        if (!this.monitorId) this.monitorId = this.monitor.connect("changed", Lang.bind(this, this._checkSettings));
 
         return true;
     },
@@ -831,17 +890,15 @@ XletSettingsBase.prototype = {
     },
 
     _saveToFile: function() {
-        if (this.monitorId) this.monitor.disconnect(this.monitorId);
         let rawData = JSON.stringify(this.settingsData, null, 4);
         let raw = this.file.replace(null, false, Gio.FileCreateFlags.NONE, null);
         let out_file = Gio.BufferedOutputStream.new_sized(raw, 4096);
         Cinnamon.write_string_to_stream(out_file, rawData);
         out_file.close(null);
-        this.monitorId = this.monitor.connect("changed", Lang.bind(this, this._checkSettings));
     },
 
-    // called by cinnamonDBus.js to when the setting is changed remotely. This is to expedite the
-    // update due to settings changes, as the file monitor has a significant delay.
+    // Called by cinnamonDBus.js when a setting is changed remotely in order to trigger
+    // setting callbacks.
     remoteUpdate: function(key, payload) {
         this._checkSettings();
     },
@@ -857,7 +914,6 @@ XletSettingsBase.prototype = {
         for (let key in this.bindings) {
             this.unbindAll(key);
         }
-        if (this.monitorId) this.monitor.disconnect(this.monitorId);
         this.disconnectAll();
     }
 }

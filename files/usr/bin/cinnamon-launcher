@@ -8,26 +8,45 @@ import sys
 import time
 import gettext
 from setproctitle import setproctitle
+from pathlib import Path
 import psutil
+import subprocess
 import threading
 import gi
+import shutil
 gi.require_version('Gtk', '3.0')  # noqa
-from gi.repository import Gtk, GLib, Gio
+from gi.repository import Gtk, GLib, Gio, GLib
 
 FALLBACK_COMMAND = "metacity"
 FALLBACK_ARGS = ("--replace",)
+
+LAUNCHER_BUS_NAME = "org.cinnamon.Launcher"
+LAUNCHER_BUS_PATH = "/org/cinnamon/Launcher"
+
+INTERFACE_XML = (
+    "<node>"
+    "  <interface name='org.cinnamon.Launcher'>"
+    "    <method name='CanRestart'>"
+    "      <arg type='b' name='result' direction='out'/>"
+    "    </method>"
+    "    <method name='TryRestart'>"
+    "      <arg type='b' name='result' direction='out'/>"
+    "    </method>"
+    "  </interface>"
+    "</node>"
+)
 
 gettext.install("cinnamon", "/usr/share/locale")
 
 panel_process_name = None
 panel_cmd = None
-if os.path.exists("/usr/bin/mate-panel"):
+if shutil.which("mate-panel"):
     panel_process_name = "mate-panel"
     panel_cmd = "mate-panel --replace &"
-elif os.path.exists("/usr/bin/gnome-panel"):
+elif shutil.which("gnome-panel"):
     panel_process_name = "gnome-panel"
     panel_cmd = "gnome-panel --replace &"
-elif os.path.exists("/usr/bin/tint2"):
+elif shutil.which("tint2"):
     panel_process_name = "tint2"
     panel_cmd = "killall tint2; tint2 &"
 
@@ -46,11 +65,16 @@ def idle_function(func):
         GLib.idle_add(func, *args)
     return wrapper
 
-class Launcher():
+class Launcher:
 
     def __init__(self):
         self.fb_pid = 0
         self.kill_lock = threading.Lock()
+
+        self.polkit_agent_proc = None
+        self.nm_applet_proc = None
+        self.can_restart = False
+        self.dialog = None
 
         self.cinnamon_pid = os.fork()
         if self.cinnamon_pid == 0:
@@ -62,12 +86,42 @@ class Launcher():
             if self.settings.get_boolean("memory-limit-enabled"):
                 print("Cinnamon memory limit enabled: %d MB" % self.settings.get_int("memory-limit"))
                 self.monitor_memory()
+            self.setup_dbus()
             self.wait_for_process()
             Gtk.main()
 
     def on_settings_changed(self, settings, key):
         print("Memory profiler status changed, restarting Cinnamon.")
         self.restart_cinnamon()
+
+    def setup_dbus(self):
+        self.node_info = Gio.DBusNodeInfo.new_for_xml(INTERFACE_XML)
+        Gio.bus_own_name(
+            Gio.BusType.SESSION,
+            LAUNCHER_BUS_NAME,
+            Gio.BusNameOwnerFlags.NONE,
+            self.on_bus_acquired,
+            None,
+            None
+        )
+
+    def on_bus_acquired(self, connection, name):
+        connection.register_object(
+            LAUNCHER_BUS_PATH,
+            self.node_info.interfaces[0],
+            self.on_method_call
+        )
+
+    def on_method_call(self, connection, sender, object_path,
+                       interface_name, method_name, parameters, invocation):
+        if method_name == "CanRestart":
+            invocation.return_value(GLib.Variant("(b)", (self.can_restart,)))
+        elif method_name == "TryRestart":
+            result = False
+            if self.can_restart and self.dialog is not None:
+                GLib.idle_add(self.dialog.response, Gtk.ResponseType.YES)
+                result = True
+            invocation.return_value(GLib.Variant("(b)", (result,)))
 
     @async_function
     def wait_for_process(self):
@@ -86,9 +140,45 @@ class Launcher():
                         # Start the fallback window manager
                         os.execvp(FALLBACK_COMMAND, (FALLBACK_COMMAND,) + FALLBACK_ARGS)
                     else:
+                        self.launch_fallback_helpers()
                         self.confirm_restart()
         else:
             Gtk.main_quit()
+
+    def launch_fallback_helpers(self):
+        agents = ("/usr/lib/policykit-1-gnome/polkit-gnome-authentication-agent-1",
+                  "/usr/libexec/polkit-gnome-authentication-agent-1",
+                  "/usr/libexec/polkit-mate-authentication-agent-1")
+
+        for path in agents:
+            if Path(path).exists():
+                print(f"Launching for fallback session: {path}")
+                self.polkit_agent_proc = subprocess.Popen([path])
+                break
+
+        # Start NM applet
+        if shutil.which("nm-applet"):
+            print(f"Launching for fallback session: nm-applet")
+            self.nm_applet_proc = subprocess.Popen(["nm-applet"])
+
+    def kill_fallback_helpers(self):
+        if self.polkit_agent_proc is not None:
+            print("Killing fallback polkit agent")
+            self.polkit_agent_proc.terminate()
+            try:
+                self.polkit_agent_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.polkit_agent_proc.kill()
+            self.polkit_agent_proc = None
+
+        if self.nm_applet_proc is not None:
+            print("Killing fallback nm-applet")
+            self.nm_applet_proc.terminate()
+            try:
+                self.nm_applet_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.nm_applet_proc.kill()
+            self.nm_applet_proc = None
 
     @async_function
     def monitor_memory(self):
@@ -113,7 +203,11 @@ class Launcher():
         os.execvp(sys.argv[0], sys.argv)
 
     def log_kill(self, memory, limit, delay):
-        directory = os.path.expanduser("~/.cinnamon")
+        try:
+            directory = os.path.join(GLib.get_user_state_dir(), 'cinnamon')
+        except AttributeError:
+            directory = os.path.expanduser("~/.cinnamon")
+
         string = "%s - Usage: %d MB - Limit: %d MB - Freq: %s sec" % (time.strftime("%Y.%m.%d %H:%M:%S"), memory, limit, delay)
         if not os.path.exists(directory):
             os.mkdir(directory)
@@ -122,6 +216,8 @@ class Launcher():
 
     @idle_function
     def confirm_restart(self):
+        self.can_restart = True
+
         d = Gtk.MessageDialog(title=None, parent=None, flags=0, message_type=Gtk.MessageType.WARNING)
         d.add_buttons(_("No"),  Gtk.ResponseType.NO,
                       _("Yes"), Gtk.ResponseType.YES)
@@ -139,12 +235,17 @@ class Launcher():
         box.set_border_width(20)
         box.add(checkbutton)
         checkbutton.show_all()
+
+        self.dialog = d
         resp = d.run()
+        self.dialog = None
+        self.can_restart = False
         d.destroy()
         if resp == Gtk.ResponseType.YES:
             if checkbutton.get_active():
                 os.environ["CINNAMON_TROUBLESHOOT"] = "1"
             os.system("killall %s" % panel_process_name)
+            self.kill_fallback_helpers()
             os.system("kill %d" % self.fb_pid)
             os.waitpid(self.fb_pid, 0)
             self.restart_cinnamon()

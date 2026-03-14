@@ -8,37 +8,17 @@ const Util = imports.misc.util;
 const PopupMenu = imports.ui.popupMenu;
 const UPowerGlib = imports.gi.UPowerGlib;
 const Settings = imports.ui.settings;
-const Calendar = require('./calendar');
-const EventView = require('./eventView');
 const CinnamonDesktop = imports.gi.CinnamonDesktop;
 const Main = imports.ui.main;
 const Separator = imports.ui.separator;
 
+const Me = imports.ui.extension.getCurrentExtension();
+const Calendar = Me.imports.calendar;
+const EventView = Me.imports.eventView;
+
 const DAY_FORMAT = CinnamonDesktop.WallClock.lctime_format("cinnamon", "%A");
-const DATE_FORMAT_SHORT = CinnamonDesktop.WallClock.lctime_format("cinnamon", "%B %-e, %Y");
-const DATE_FORMAT_FULL = CinnamonDesktop.WallClock.lctime_format("cinnamon", "%A, %B %-e, %Y");
-
-String.prototype.capitalize = function() {
-    return this.charAt(0).toUpperCase() + this.slice(1);
-}
-
-function _onVertSepRepaint (area)
-{
-    let cr = area.get_context();
-    let themeNode = area.get_theme_node();
-    let [width, height] = area.get_surface_size();
-    let stippleColor = themeNode.get_color('-stipple-color');
-    let stippleWidth = themeNode.get_length('-stipple-width');
-    let x = Math.floor(width/2) + 0.5;
-    cr.moveTo(x, 0);
-    cr.lineTo(x, height);
-    Clutter.cairo_set_source_color(cr, stippleColor);
-    cr.setDash([1, 3], 1); // Hard-code for now
-    cr.setLineWidth(stippleWidth);
-    cr.stroke();
-
-    cr.$dispose();
-};
+const DATE_FORMAT_SHORT = CinnamonDesktop.WallClock.lctime_format("cinnamon", _("%B %-e, %Y"));
+const DATE_FORMAT_FULL = CinnamonDesktop.WallClock.lctime_format("cinnamon", _("%A, %B %-e, %Y"));
 
 class CinnamonCalendarApplet extends Applet.TextApplet {
     constructor(orientation, panel_height, instance_id) {
@@ -110,6 +90,12 @@ class CinnamonCalendarApplet extends Applet.TextApplet {
 
             this.go_home_button.connect("button-press-event", Lang.bind(this, (actor, event) => {
                 if (event.get_button() == Clutter.BUTTON_PRIMARY) {
+                    return Clutter.EVENT_STOP;
+                }
+            }));
+
+            this.go_home_button.connect("button-release-event", Lang.bind(this, (actor, event) => {
+                if (event.get_button() == Clutter.BUTTON_PRIMARY) {
                     // button immediately becomes non-reactive, so leave-event will never fire.
                     actor.remove_style_pseudo_class("hover");
                     this._resetCalendar();
@@ -143,7 +129,7 @@ class CinnamonCalendarApplet extends Applet.TextApplet {
 
             this.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-            let item = new PopupMenu.PopupMenuItem(_("Date and Time Settings"))
+            let item = new PopupMenu.PopupMenuItem(_("Date and Time Settings"));
             item.connect("activate", Lang.bind(this, this._onLaunchSettings));
 
             this.menu.addMenuItem(item);
@@ -151,16 +137,17 @@ class CinnamonCalendarApplet extends Applet.TextApplet {
             this.settings.bind("show-events", "show_events", this._onSettingsChanged);
             this.settings.bind("use-custom-format", "use_custom_format", this._onSettingsChanged);
             this.settings.bind("custom-format", "custom_format", this._onSettingsChanged);
+            this.settings.bind("custom-tooltip-format", "custom_tooltip_format", this._onSettingsChanged);
             this.settings.bind("keyOpen", "keyOpen", this._setKeybinding);
             this._setKeybinding();
 
             /* FIXME: Add gobject properties to the WallClock class to allow easier access from
              * its clients, and possibly a separate signal to notify of updates to these properties
              * (though GObject "changed" would be sufficient.) */
-            this.desktop_settings.connect("changed::clock-use-24h", Lang.bind(this, function(key) {
+            this.desktop_settings.connect("changed::clock-use-24h", Lang.bind(this, function (key) {
                 this._onSettingsChanged();
             }));
-            this.desktop_settings.connect("changed::clock-show-seconds", Lang.bind(this, function(key) {
+            this.desktop_settings.connect("changed::clock-show-seconds", Lang.bind(this, function (key) {
                 this._onSettingsChanged();
             }));
 
@@ -171,14 +158,25 @@ class CinnamonCalendarApplet extends Applet.TextApplet {
             } catch (e) {
                 this._upClient.connect('notify::resume', Lang.bind(this, this._updateClockAndDate));
             }
+
+            // Change the format string if the mouse is over the calender to account for the tooltip.
+            this._is_entered = false;
+            this.actor.connect('enter-event', Lang.bind(this, function (menu, event) {
+                this._is_entered = true;
+                this._updateFormatString();
+            }))
+            this.actor.connect('leave-event', Lang.bind(this, function (menu, event) {
+                this._is_entered = false;
+                this._updateFormatString();
+            }))
         }
         catch (e) {
             global.logError(e);
         }
     }
-    
+
     _setKeybinding() {
-        Main.keybindingManager.addHotKey("calendar-open-" + this.instance_id, this.keyOpen, Lang.bind(this, this._openMenu));
+        Main.keybindingManager.addXletHotKey(this, "calendar-open", this.keyOpen, Lang.bind(this, this._openMenu));
     }
 
     _clockNotify(obj, pspec, data) {
@@ -188,7 +186,7 @@ class CinnamonCalendarApplet extends Applet.TextApplet {
     on_applet_clicked(event) {
         this._openMenu();
     }
-    
+
     _openMenu() {
         this.menu.toggle();
     }
@@ -201,7 +199,7 @@ class CinnamonCalendarApplet extends Applet.TextApplet {
     }
 
     on_custom_format_button_pressed() {
-        Util.spawnCommandLine("xdg-open http://www.foragoodstrftime.com/");
+        Util.spawnCommandLine("xdg-open https://cinnamon-spices.linuxmint.com/strftime.php");
     }
 
     _onLaunchSettings() {
@@ -213,7 +211,17 @@ class CinnamonCalendarApplet extends Applet.TextApplet {
         let in_vertical_panel = (this.orientation == St.Side.LEFT || this.orientation == St.Side.RIGHT);
 
         if (this.use_custom_format) {
-            if (!this.clock.set_format_string(this.custom_format)) {
+            let custom_format = this.custom_format;
+
+            /* The frequency that the clock updates is based on the format string.
+             * Thus, when the tooltip is displayed, we join the regular custom format string
+             * with the custom tooltip format. That way, the format string is guaranteed
+             * to contain whatever has the finest resolution between them. */
+            if (this._is_entered) {
+                custom_format += this.custom_tooltip_format;
+            }
+
+            if (!this.clock.set_format_string(custom_format)) {
                 global.logError("Calendar applet: bad time format string - check your string.");
                 this.clock.set_format_string("~CLOCK FORMAT ERROR~ %l:%M %p");
             }
@@ -246,7 +254,6 @@ class CinnamonCalendarApplet extends Applet.TextApplet {
 
     _has_calendars_changed(em) {
         this.event_list.actor.visible = this.events_manager.is_active();
-        this.events_manager.select_date(this._calendar.getSelectedDate());
     }
 
     _updateClockAndDate() {
@@ -255,18 +262,38 @@ class CinnamonCalendarApplet extends Applet.TextApplet {
         if (!this.use_custom_format) {
             label_string = label_string.capitalize();
         }
+        else if (this._is_entered) {
+            label_string = this.clock.get_clock_for_format(this.custom_format);
+        }
+
+        if (label_string)
+            this.set_applet_label(label_string);
 
         this.go_home_button.reactive = !this._calendar.todaySelected();
+        if (this._calendar.todaySelected()) {
+            this.go_home_button.reactive = false;
+            this.go_home_button.set_style_class_name("calendar-today-home-button");
+        } else {
+            this.go_home_button.reactive = true;
+            this.go_home_button.set_style_class_name("calendar-today-home-button-enabled");
+        }
 
-        this.set_applet_label(label_string);
+        let dateFormattedTooltip = this.clock.get_clock_for_format(DATE_FORMAT_FULL).capitalize();
+        if (this.use_custom_format) {
+            try {
+                dateFormattedTooltip = this.clock.get_clock_for_format(this.custom_tooltip_format).capitalize();
+            } catch (e) {
+                global.logError("Calendar applet: bad tooltip time format string - check your string.");
+                dateFormattedTooltip = this.clock.get_clock_for_format("~CLOCK FORMAT ERROR~ %l:%M %p");
+            }
+        }
 
-        let dateFormattedFull = this.clock.get_clock_for_format(DATE_FORMAT_FULL).capitalize();
         let dateFormattedShort = this.clock.get_clock_for_format(DATE_FORMAT_SHORT).capitalize();
         let dayFormatted = this.clock.get_clock_for_format(DAY_FORMAT).capitalize();
 
         this._day.set_text(dayFormatted);
         this._date.set_text(dateFormattedShort);
-        this.set_applet_tooltip(dateFormattedFull);
+        this.set_applet_tooltip(dateFormattedTooltip);
 
         this.events_manager.select_date(this._calendar.getSelectedDate());
     }
@@ -284,19 +311,19 @@ class CinnamonCalendarApplet extends Applet.TextApplet {
     }
 
     on_applet_removed_from_panel() {
-        Main.keybindingManager.removeHotKey("calendar-open-" + this.instance_id);
+        Main.keybindingManager.removeXletHotKey(this, "calendar-open");
         if (this.clock_notify_id > 0) {
             this.clock.disconnect(this.clock_notify_id);
             this.clock_notify_id = 0;
         }
     }
 
-    _initContextMenu () {
+    _initContextMenu() {
         this.menu = new Applet.AppletPopupMenu(this, this.orientation);
         this.menuManager.addMenu(this.menu);
 
         // Whenever the menu is opened, select today
-        this.menu.connect('open-state-changed', Lang.bind(this, function(menu, isOpen) {
+        this.menu.connect('open-state-changed', Lang.bind(this, function (menu, isOpen) {
             if (isOpen) {
                 this._resetCalendar();
                 this.events_manager.select_date(this._calendar.getSelectedDate(), true);
@@ -304,11 +331,11 @@ class CinnamonCalendarApplet extends Applet.TextApplet {
         }));
     }
 
-    _resetCalendar () {
+    _resetCalendar() {
         this._calendar.setDate(new Date(), true);
     }
 
-    on_orientation_changed (orientation) {
+    on_orientation_changed(orientation) {
         this.orientation = orientation;
         this.menu.setOrientation(orientation);
         this._onSettingsChanged();

@@ -81,7 +81,7 @@ function _formatEventTime(event, clockFormat) {
         default:
             /* explicit fall-through */
         case '12h':
-            /* Transators: Shown in calendar event list, if 12h format */
+            /* Translators: Shown in calendar event list, if 12h format */
             ret = event.date.toLocaleFormat(C_("event list time", "%l:%M %p"));
             break;
         }
@@ -145,7 +145,7 @@ function _dateIntervalsOverlap(a0, a1, b0, b1)
         return true;
 }
 
-class Calendar {
+var Calendar = class Calendar {
     constructor(settings, events_manager) {
         this.events_manager = events_manager;
         this._weekStart = Cinnamon.util_get_week_start();
@@ -153,16 +153,17 @@ class Calendar {
         this._digitWidth = NaN;
         this.settings = settings;
 
-        this.update_id = 0;
+        this._update_id = 0;
+        this._set_date_idle_id = 0;
 
         this.settings.bindWithObject(this, "show-week-numbers", "show_week_numbers", this._onSettingsChange);
         this.desktop_settings = new Gio.Settings({ schema_id: DESKTOP_SCHEMA });
         this.desktop_settings.connect("changed::" + FIRST_WEEKDAY_KEY, Lang.bind(this, this._onSettingsChange));
 
-        this.events_enabled = true;
+        this.events_enabled = false;
         this.events_manager.connect("events-updated", this._events_updated.bind(this));
         this.events_manager.connect("events-manager-ready", this._update_events_enabled.bind(this));
-        this.events_manager.connect("calendars-changed", this._update_events_enabled.bind(this));
+        this.events_manager.connect("has-calendars-changed", this._update_events_enabled.bind(this));
 
         // Find the ordering for month/year in the calendar heading
 
@@ -198,27 +199,43 @@ class Calendar {
     }
 
     _cancel_update() {
-        if (this.update_id > 0) {
-            Mainloop.source_remove(this.update_id);
-            this.update_id = 0;
+        if (this._update_id > 0) {
+            Mainloop.source_remove(this._update_id);
+            this._update_id = 0;
         }
     }
 
     _queue_update() {
-        this._cancel_update()
+        this._cancel_update();
 
-        this.update_id = Mainloop.idle_add(Lang.bind(this, this._idle_do_update));
+        this._update_id = Mainloop.idle_add(Lang.bind(this, this._idle_do_update));
     }
 
     _idle_do_update() {
-        this.update_id = 0;
+        this._update_id = 0;
         this._update();
 
         return GLib.SOURCE_REMOVE;
     }
 
+    _queue_set_date_idle(date) {
+        this.setDate(date, false);
+        this._set_date_idle_id = 0;
+
+        return GLib.SOURCE_REMOVE;
+     }
+
+    queue_set_date(date) {
+        if (this._set_date_idle_id > 0) {
+            return;
+        }
+
+        this._set_date_idle_id = Mainloop.timeout_add(25, this._queue_set_date_idle.bind(this, date));
+    }
+
     _update_events_enabled(em) {
-        this.events_enabled = this.events_manager.is_active()
+        this.events_enabled = this.events_manager.is_active();
+        this._queue_update();
     }
 
     _onSettingsChange(object, key, old_val, new_val) {
@@ -371,7 +388,7 @@ class Calendar {
 
         let newDate = new Date();
         newDate.setFullYear(newYear, newMonth, newDayOfMonth);
-        this.setDate(newDate, false);
+        this.queue_set_date(newDate);
     }
 
     _onPrevYearButtonClicked() {
@@ -393,15 +410,13 @@ class Calendar {
     _update(forceReload) {
         let now = new Date();
 
-        this._update_events_enabled();
-
         this._monthLabel.text = this._selectedDate.toLocaleFormat('%OB').capitalize();
         this._yearLabel.text = this._selectedDate.toLocaleFormat('%Y');
 
         // Remove everything but the topBox and the weekday labels
         let children = this.actor.get_children();
         for (let i = this._firstDayIndex; i < children.length; i++)
-            children[i].destroy();
+            this.actor.remove_actor(children[i]);
 
         // Start at the beginning of the week before the start of the month
         let beginDate = new Date(this._selectedDate);
@@ -415,11 +430,8 @@ class Calendar {
         let row = 2;
 
         while (true) {
-            let group = new Clutter.Actor(
-                {
-                    layout_manager: new Clutter.FixedLayout()
-                }
-            );
+            let group = new Cinnamon.Stack();
+
             let button = new St.Button(
                 {
                     label: iter.getDate().toString(),
@@ -431,15 +443,9 @@ class Calendar {
             let dot_box = new Cinnamon.GenericContainer(
                 {
                     style_class: "calendar-day-event-dot-box",
-                    constraints: new Clutter.BindConstraint(
-                        {
-                            source: group,
-                            coordinate: Clutter.BindCoordinate.WIDTH
-                        }
-                    )
                 }
-            )
-            dot_box.connect('allocate', this._allocate_dot_box.bind(this))
+            );
+            dot_box.connect('allocate', this._allocate_dot_box.bind(this));
             group.add_actor(dot_box);
 
             let iterStr = iter.toUTCString();
@@ -453,9 +459,9 @@ class Calendar {
 
             let styleClass = 'calendar-day-base calendar-day';
             if (_isWorkDay(iter))
-                styleClass += ' calendar-work-day'
+                styleClass += ' calendar-work-day';
             else
-                styleClass += ' calendar-nonwork-day'
+                styleClass += ' calendar-nonwork-day';
 
             // Hack used in lieu of border-collapse - see cinnamon.css
             if (row == 2)
@@ -552,10 +558,10 @@ class Calendar {
             let dots_this_row = Math.min(dots_left, max_children_per_row);
             let total_child_width = nw * dots_this_row;
 
-            let start_x = (box_width - total_child_width) / 2;
+            let start_x = Math.floor((box_width - total_child_width) / 2);
 
             let cbox = new Clutter.ActorBox();
-            cbox.x1 = start_x
+            cbox.x1 = start_x;
             cbox.y1 = dot_row * nh;
             cbox.x2 = cbox.x1 + nw;
             cbox.y2 = cbox.y1 + nh;

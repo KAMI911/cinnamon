@@ -1,226 +1,30 @@
 #!/usr/bin/python3
 
-import html
 import gettext
+import json
+import os
+import subprocess
+
+from pathlib import Path
+from html import escape
 
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gio, Gtk
+from gi.repository import Gdk, Gio, Gtk
 
-from KeybindingWidgets import CellRendererKeybinding
-from SettingsWidgets import SidePage
+from bin.KeybindingWidgets import ButtonKeybinding, CellRendererKeybinding
+from bin.SettingsWidgets import SidePage, Keybinding
+from bin import util
+from bin import InputSources
+from bin import XkbSettings
+from bin import KeybindingTable
 from xapp.GSettingsWidgets import *
 
 gettext.install("cinnamon", "/usr/share/locale")
 
-# Keybindings page - check if we need to store custom
-# keybindings to gsettings key as well as GConf (In Mint 14 this is changed)
-CUSTOM_KEYS_PARENT_SCHEMA = "org.cinnamon.desktop.keybindings"
-CUSTOM_KEYS_BASENAME = "/org/cinnamon/desktop/keybindings/custom-keybindings"
-CUSTOM_KEYS_SCHEMA = "org.cinnamon.desktop.keybindings.custom-keybinding"
+MASKS = [Gdk.ModifierType.CONTROL_MASK, Gdk.ModifierType.MOD1_MASK,
+         Gdk.ModifierType.SHIFT_MASK, Gdk.ModifierType.SUPER_MASK]
 
-MUFFIN_KEYBINDINGS_SCHEMA = "org.cinnamon.desktop.keybindings.wm"
-MEDIA_KEYS_SCHEMA = "org.cinnamon.desktop.keybindings.media-keys"
-CINNAMON_SCHEMA = "org.cinnamon.desktop.keybindings"
-
-CATEGORIES = [
-
-    #   Label                   id                  parent
-    #(child)Label                       id                  parent
-
-    [_("General"),          "general",          None,       "preferences-desktop-keyboard-shortcuts"],
-    [_("Troubleshooting"),      "trouble",          "general",      None],
-    [_("Windows"),          "windows",          None,       "preferences-system-windows"],
-    [_("Positioning"),          "win-position",     "windows",      None],
-    [_("Tiling and Snapping"),  "win-tiling",       "windows",      None],
-    [_("Inter-workspace"),      "win-workspaces",   "windows",      None],
-    [_("Inter-monitor"),        "win-monitors",     "windows",      None],
-    [_("Workspaces"),       "workspaces",       None,       "video-display"],
-    [_("Direct Navigation"),    "ws-navi",          "workspaces",   None],
-    [_("System"),           "system",           None,       "preferences-system"],
-    [_("Hardware"),             "sys-hw",           "system",       None],
-    [_("Screenshots and Recording"),"sys-screen",   "system",       None],
-    [_("Launchers"),        "launchers",        None,       "applications-utilities"],
-    [_("Sound and Media"),  "media",            None,       "applications-multimedia"],
-    [_("Quiet Keys"),           "media-quiet",      "media",        None],
-    [_("Universal Access"), "accessibility",    None,       "preferences-desktop-accessibility"],
-    [_("Custom Shortcuts"), "custom",           None,       "cinnamon-panel-launcher"]
-]
-
-KEYBINDINGS = [
-    #   KB Label                        Schema                  Key name               Array?  Category
-    # General
-    [_("Show the window selection screen"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-to-workspace-down", "general"],
-    [_("Show the workspace selection screen"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-to-workspace-up", "general"],
-    [_("Show desktop"), MUFFIN_KEYBINDINGS_SCHEMA, "show-desktop", "general"],
-    [_("Show Desklets"), CINNAMON_SCHEMA, "show-desklets", "general"],
-    [_("Cycle through open windows"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-windows", "general"],
-    [_("Cycle backwards through open windows"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-windows-backward", "general"],
-    [_("Cycle through open windows of the same application"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-group", "general"],
-    [_("Cycle backwards through open windows of the same application"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-group-backward", "general"],
-    [_("Run dialog"), MUFFIN_KEYBINDINGS_SCHEMA, "panel-run-dialog", "general"],
-    # General - Troubleshooting
-    [_("Toggle Looking Glass"), CINNAMON_SCHEMA, "looking-glass-keybinding", "trouble"],
-    # Windows
-    [_("Maximize window"), MUFFIN_KEYBINDINGS_SCHEMA, "maximize", "windows"],
-    [_("Unmaximize window"), MUFFIN_KEYBINDINGS_SCHEMA, "unmaximize", "windows"],
-    [_("Minimize window"), MUFFIN_KEYBINDINGS_SCHEMA, "minimize", "windows"],
-    [_("Close window"), MUFFIN_KEYBINDINGS_SCHEMA, "close", "windows"],
-    [_("Activate window menu"), MUFFIN_KEYBINDINGS_SCHEMA, "activate-window-menu", "windows"],
-    [_("Raise window"), MUFFIN_KEYBINDINGS_SCHEMA, "raise", "windows"],
-    [_("Lower window"), MUFFIN_KEYBINDINGS_SCHEMA, "lower", "windows"],
-    [_("Toggle maximization state"), MUFFIN_KEYBINDINGS_SCHEMA, "toggle-maximized", "windows"],
-    [_("Toggle fullscreen state"), MUFFIN_KEYBINDINGS_SCHEMA, "toggle-fullscreen", "windows"],
-    [_("Toggle shaded state"), MUFFIN_KEYBINDINGS_SCHEMA, "toggle-shaded", "windows"],
-    [_("Toggle always on top"), MUFFIN_KEYBINDINGS_SCHEMA, "toggle-above", "windows"],
-    [_("Toggle showing window on all workspaces"), MUFFIN_KEYBINDINGS_SCHEMA, "toggle-on-all-workspaces", "windows"],
-    [_("Increase opacity"), MUFFIN_KEYBINDINGS_SCHEMA, "increase-opacity", "windows"],
-    [_("Decrease opacity"), MUFFIN_KEYBINDINGS_SCHEMA, "decrease-opacity", "windows"],
-    [_("Toggle vertical maximization"), MUFFIN_KEYBINDINGS_SCHEMA, "maximize-vertically", "windows"],
-    [_("Toggle horizontal maximization"), MUFFIN_KEYBINDINGS_SCHEMA, "maximize-horizontally", "windows"],
-    # Windows - Positioning
-    [_("Resize window"), MUFFIN_KEYBINDINGS_SCHEMA, "begin-resize", "win-position"],
-    [_("Move window"), MUFFIN_KEYBINDINGS_SCHEMA, "begin-move", "win-position"],
-    [_("Center window in screen"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-center", "win-position"],
-    [_("Move window to upper-right"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-corner-ne", "win-position"],
-    [_("Move window to upper-left"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-corner-nw", "win-position"],
-    [_("Move window to lower-right"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-corner-se", "win-position"],
-    [_("Move window to lower-left"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-corner-sw", "win-position"],
-    [_("Move window to right edge"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-side-e", "win-position"],
-    [_("Move window to top edge"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-side-n", "win-position"],
-    [_("Move window to bottom edge"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-side-s", "win-position"],
-    [_("Move window to left edge"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-side-w", "win-position"],
-    # Windows - Tiling and Snapping
-    [_("Push tile left"), MUFFIN_KEYBINDINGS_SCHEMA, "push-tile-left", "win-tiling"],
-    [_("Push tile right"), MUFFIN_KEYBINDINGS_SCHEMA, "push-tile-right", "win-tiling"],
-    [_("Push tile up"), MUFFIN_KEYBINDINGS_SCHEMA, "push-tile-up", "win-tiling"],
-    [_("Push tile down"), MUFFIN_KEYBINDINGS_SCHEMA, "push-tile-down", "win-tiling"],
-    [_("Push snap left"), MUFFIN_KEYBINDINGS_SCHEMA, "push-snap-left", "win-tiling"],
-    [_("Push snap right"), MUFFIN_KEYBINDINGS_SCHEMA, "push-snap-right", "win-tiling"],
-    [_("Push snap up"), MUFFIN_KEYBINDINGS_SCHEMA, "push-snap-up", "win-tiling"],
-    [_("Push snap down"), MUFFIN_KEYBINDINGS_SCHEMA, "push-snap-down", "win-tiling"],
-    # Windows - Workspace-related
-    [_("Move window to new workspace"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-workspace-new", "win-workspaces"],
-    [_("Move window to left workspace"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-workspace-left", "win-workspaces"],
-    [_("Move window to right workspace"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-workspace-right", "win-workspaces"],
-    [_("Move window to workspace 1"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-workspace-1", "win-workspaces"],
-    [_("Move window to workspace 2"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-workspace-2", "win-workspaces"],
-    [_("Move window to workspace 3"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-workspace-3", "win-workspaces"],
-    [_("Move window to workspace 4"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-workspace-4", "win-workspaces"],
-    [_("Move window to workspace 5"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-workspace-5", "win-workspaces"],
-    [_("Move window to workspace 6"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-workspace-6", "win-workspaces"],
-    [_("Move window to workspace 7"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-workspace-7", "win-workspaces"],
-    [_("Move window to workspace 8"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-workspace-8", "win-workspaces"],
-    [_("Move window to workspace 9"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-workspace-9", "win-workspaces"],
-    [_("Move window to workspace 10"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-workspace-10", "win-workspaces"],
-    [_("Move window to workspace 11"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-workspace-11", "win-workspaces"],
-    [_("Move window to workspace 12"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-workspace-12", "win-workspaces"],
-    #Windows - Monitor-related
-    [_("Move window to left monitor"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-monitor-left", "win-monitors"],
-    [_("Move window to right monitor"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-monitor-right", "win-monitors"],
-    [_("Move window to up monitor"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-monitor-up", "win-monitors"],
-    [_("Move window to down monitor"), MUFFIN_KEYBINDINGS_SCHEMA, "move-to-monitor-down", "win-monitors"],
-    # Workspaces
-    [_("Switch to left workspace"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-to-workspace-left", "workspaces"],
-    [_("Switch to right workspace"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-to-workspace-right", "workspaces"],
-    # Workspaces - Direct Nav
-    [_("Switch to workspace 1"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-to-workspace-1", "ws-navi"],
-    [_("Switch to workspace 2"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-to-workspace-2", "ws-navi"],
-    [_("Switch to workspace 3"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-to-workspace-3", "ws-navi"],
-    [_("Switch to workspace 4"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-to-workspace-4", "ws-navi"],
-    [_("Switch to workspace 5"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-to-workspace-5", "ws-navi"],
-    [_("Switch to workspace 6"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-to-workspace-6", "ws-navi"],
-    [_("Switch to workspace 7"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-to-workspace-7", "ws-navi"],
-    [_("Switch to workspace 8"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-to-workspace-8", "ws-navi"],
-    [_("Switch to workspace 9"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-to-workspace-9", "ws-navi"],
-    [_("Switch to workspace 10"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-to-workspace-10", "ws-navi"],
-    [_("Switch to workspace 11"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-to-workspace-11", "ws-navi"],
-    [_("Switch to workspace 12"), MUFFIN_KEYBINDINGS_SCHEMA, "switch-to-workspace-12", "ws-navi"],
-    # System
-    [_("Log out"), MEDIA_KEYS_SCHEMA, "logout", "system"],
-    [_("Shut down"), MEDIA_KEYS_SCHEMA, "shutdown", "system"],
-    [_("Lock screen"), MEDIA_KEYS_SCHEMA, "screensaver", "system"],
-    [_("Suspend"), MEDIA_KEYS_SCHEMA, "suspend", "system"],
-    [_("Hibernate"), MEDIA_KEYS_SCHEMA, "hibernate", "system"],
-    [_("Restart Cinnamon"), MEDIA_KEYS_SCHEMA, "restart-cinnamon", "system"],
-    # System - Screenshots
-    [_("Take a screenshot of an area"), MEDIA_KEYS_SCHEMA, "area-screenshot", "sys-screen"],
-    [_("Copy a screenshot of an area to clipboard"), MEDIA_KEYS_SCHEMA, "area-screenshot-clip", "sys-screen"],
-    [_("Take a screenshot"), MEDIA_KEYS_SCHEMA, "screenshot", "sys-screen"],
-    [_("Copy a screenshot to clipboard"), MEDIA_KEYS_SCHEMA, "screenshot-clip", "sys-screen"],
-    [_("Take a screenshot of a window"), MEDIA_KEYS_SCHEMA, "window-screenshot", "sys-screen"],
-    [_("Copy a screenshot of a window to clipboard"), MEDIA_KEYS_SCHEMA, "window-screenshot-clip", "sys-screen"],
-    [_("Toggle recording desktop (must restart Cinnamon)"), MUFFIN_KEYBINDINGS_SCHEMA, "toggle-recording", "sys-screen"],
-    # System - Hardware
-    [_("Re-detect display devices"), MEDIA_KEYS_SCHEMA, "video-outputs", "sys-hw"],
-    [_("Rotate display"), MEDIA_KEYS_SCHEMA, "video-rotation", "sys-hw"],
-    [_("Orientation Lock"), MEDIA_KEYS_SCHEMA, "video-rotation-lock", "sys-hw"],
-    [_("Increase screen brightness"), MEDIA_KEYS_SCHEMA, "screen-brightness-up", "sys-hw"],
-    [_("Decrease screen brightness"), MEDIA_KEYS_SCHEMA, "screen-brightness-down", "sys-hw"],
-    [_("Toggle keyboard backlight"), MEDIA_KEYS_SCHEMA, "kbd-brightness-toggle", "sys-hw"],
-    [_("Increase keyboard backlight level"), MEDIA_KEYS_SCHEMA, "kbd-brightness-up", "sys-hw"],
-    [_("Decrease keyboard backlight level"), MEDIA_KEYS_SCHEMA, "kbd-brightness-down", "sys-hw"],
-    [_("Toggle touchpad state"), MEDIA_KEYS_SCHEMA, "touchpad-toggle", "sys-hw"],
-    [_("Turn touchpad on"), MEDIA_KEYS_SCHEMA, "touchpad-on", "sys-hw"],
-    [_("Turn touchpad off"), MEDIA_KEYS_SCHEMA, "touchpad-off", "sys-hw"],
-    [_("Show power statistics"), MEDIA_KEYS_SCHEMA, "battery", "sys-hw"],
-    # Launchers
-    [_("Launch terminal"), MEDIA_KEYS_SCHEMA, "terminal", "launchers"],
-    [_("Launch help browser"), MEDIA_KEYS_SCHEMA, "help", "launchers"],
-    [_("Launch calculator"), MEDIA_KEYS_SCHEMA, "calculator", "launchers"],
-    [_("Launch email client"), MEDIA_KEYS_SCHEMA, "email", "launchers"],
-    [_("Launch web browser"), MEDIA_KEYS_SCHEMA, "www", "launchers"],
-    [_("Home folder"), MEDIA_KEYS_SCHEMA, "home", "launchers"],
-    [_("Search"), MEDIA_KEYS_SCHEMA, "search", "launchers"],
-    # Sound and Media
-    [_("Volume mute"), MEDIA_KEYS_SCHEMA, "volume-mute", "media"],
-    [_("Volume down"), MEDIA_KEYS_SCHEMA, "volume-down", "media"],
-    [_("Volume up"), MEDIA_KEYS_SCHEMA, "volume-up", "media"],
-    [_("Mic mute"), MEDIA_KEYS_SCHEMA, "mic-mute", "media"],
-    [_("Launch media player"), MEDIA_KEYS_SCHEMA, "media", "media"],
-    [_("Play"), MEDIA_KEYS_SCHEMA, "play", "media"],
-    [_("Pause playback"), MEDIA_KEYS_SCHEMA, "pause", "media"],
-    [_("Stop playback"), MEDIA_KEYS_SCHEMA, "stop", "media"],
-    [_("Previous track"), MEDIA_KEYS_SCHEMA, "previous", "media"],
-    [_("Next track"), MEDIA_KEYS_SCHEMA, "next", "media"],
-    [_("Eject"), MEDIA_KEYS_SCHEMA, "eject", "media"],
-    [_("Rewind"), MEDIA_KEYS_SCHEMA, "audio-rewind", "media"],
-    [_("Fast-forward"), MEDIA_KEYS_SCHEMA, "audio-forward", "media"],
-    [_("Repeat"), MEDIA_KEYS_SCHEMA, "audio-repeat", "media"],
-    [_("Shuffle"), MEDIA_KEYS_SCHEMA, "audio-random", "media"],
-    # Sound and Media Quiet
-    [_("Volume mute (Quiet)"), MEDIA_KEYS_SCHEMA, "mute-quiet", "media-quiet"],    # Not sure this is even necessary
-    [_("Volume down (Quiet)"), MEDIA_KEYS_SCHEMA, "volume-down-quiet", "media-quiet"],
-    [_("Volume up (Quiet)"), MEDIA_KEYS_SCHEMA, "volume-up-quiet", "media-quiet"],
-    # Universal Access
-    [_("Zoom in"), CINNAMON_SCHEMA, "magnifier-zoom-in", "accessibility"],
-    [_("Zoom out"), CINNAMON_SCHEMA, "magnifier-zoom-out", "accessibility"],
-    [_("Turn screen reader on or off"), MEDIA_KEYS_SCHEMA, "screenreader", "accessibility"],
-    [_("Turn on-screen keyboard on or off"), MEDIA_KEYS_SCHEMA, "on-screen-keyboard", "accessibility"],
-    [_("Increase text size"), MEDIA_KEYS_SCHEMA, "increase-text-size", "accessibility"],
-    [_("Decrease text size"), MEDIA_KEYS_SCHEMA, "decrease-text-size", "accessibility"],
-    [_("High contrast on or off"), MEDIA_KEYS_SCHEMA, "toggle-contrast", "accessibility"]
-]
-
-# keybindings.js listens for changes to 'custom-list'. Any time we create a shortcut
-# or add/remove individual keybindings, we need to cause this list to change.
-#
-# Unfortunately, at some point recently, simply 'touching' the setting without actually
-# modifying its contents stopped working (see CustomKeybinding.writeSettings), and
-# we must now do something more substantial, like reversing the list each time (the order
-# doesn't matter to the rest of this code).  In order for this to be reliable we need
-# to make sure we always end up with at least 2 entries in 'custom-list', since reversing
-# a list with one element won't do anything.
-DUMMY_CUSTOM_ENTRY = "__dummy__"
-
-def ensureCustomListIsValid(custom_list):
-    if len(custom_list) > 1:
-        return;
-
-    if DUMMY_CUSTOM_ENTRY in custom_list:
-        return;
-
-    custom_list.append(DUMMY_CUSTOM_ENTRY);
 
 class Module:
     comment = _("Manage keyboard settings and shortcuts")
@@ -229,14 +33,35 @@ class Module:
 
     def __init__(self, content_box):
         keywords = _("keyboard, shortcut, hotkey")
-        sidePage = SidePage(_("Keyboard"), "cs-keyboard", keywords, content_box, module=self)
+        sidePage = SidePage(_("Keyboard"), "cs-keyboard", keywords, content_box, size=550, module=self)
         self.sidePage = sidePage
+        self.current_category = None
+        self.last_selected_category = None
+        self.last_selected_binding = None
+        self.loaded = False
+
+        self.cat_store = None
+        self.kb_root_store = None
+        self.kb_store = None
+        self.entry_store = None
+        self.cat_tree = None
+        self.kb_tree = None
+        self.entry_tree = None
+        self.color_found = None
+        self.placeholder_rgba = None
+        self.kb_search_entry = None
+        self.kb_search_handler_id = None
+        self.add_custom_button = None
+        self.remove_custom_button = None
+        self.search_choice = "shortcuts"
+        self.last_accel_string = ""
 
     def on_module_selected(self):
         if not self.loaded:
             print("Loading Keyboard module")
 
             self.sidePage.stack = SettingsStack()
+            self.sidePage.stack.set_homogeneous(False)
             self.sidePage.add_widget(self.sidePage.stack)
 
             # Typing
@@ -247,14 +72,14 @@ class Module:
 
             self.sidePage.stack.add_titled(page, "typing", _("Typing"))
 
-            switch = GSettingsSwitch(_("Enable key repeat"), "org.cinnamon.settings-daemon.peripherals.keyboard", "repeat")
+            switch = GSettingsSwitch(_("Enable key repeat"), "org.cinnamon.desktop.peripherals.keyboard", "repeat")
             settings.add_row(switch)
 
-            slider = GSettingsRange(_("Repeat delay:"), "org.cinnamon.settings-daemon.peripherals.keyboard", "delay", _("Short"), _("Long"), 100, 2000, show_value=False)
-            settings.add_reveal_row(slider, "org.cinnamon.settings-daemon.peripherals.keyboard", "repeat")
+            slider = GSettingsRange(_("Repeat delay:"), "org.cinnamon.desktop.peripherals.keyboard", "delay", _("Short"), _("Long"), 100, 2000, show_value=False)
+            settings.add_reveal_row(slider, "org.cinnamon.desktop.peripherals.keyboard", "repeat")
 
-            slider = GSettingsRange(_("Repeat speed:"), "org.cinnamon.settings-daemon.peripherals.keyboard", "repeat-interval", _("Slow"), _("Fast"), 20, 2000, log=True, show_value=False, flipped=True)
-            settings.add_reveal_row(slider, "org.cinnamon.settings-daemon.peripherals.keyboard", "repeat")
+            slider = GSettingsRange(_("Repeat speed:"), "org.cinnamon.desktop.peripherals.keyboard", "repeat-interval", _("Slow"), _("Fast"), 20, 2000, log=True, show_value=False, flipped=True)
+            settings.add_reveal_row(slider, "org.cinnamon.desktop.peripherals.keyboard", "repeat")
 
             settings = page.add_section(_("Text cursor"))
 
@@ -264,13 +89,11 @@ class Module:
             slider = GSettingsRange(_("Blink speed:"), "org.cinnamon.desktop.interface", "cursor-blink-time", _("Slow"), _("Fast"), 100, 2500, show_value=False, flipped=True)
             settings.add_reveal_row(slider, "org.cinnamon.desktop.interface", "cursor-blink")
 
-            # vbox.add(Gtk.Label.new(_("Test Box")))
-            # vbox.add(Gtk.Entry())
-
             vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
             vbox.set_border_width(6)
             vbox.set_spacing(6)
             self.sidePage.stack.add_titled(vbox, "shortcuts", _("Shortcuts"))
+            self.sidePage.stack.connect("notify::visible-child-name", self.stack_page_changed)
 
             headingbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 2)
             mainbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 2)
@@ -282,13 +105,61 @@ class Module:
 
             left_vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 2)
             right_vbox = Gtk.Box.new(Gtk.Orientation.VERTICAL, 2)
+            self.search_vbox = Gtk.Box.new(Gtk.Orientation.HORIZONTAL, 2)
 
             paned.add1(left_vbox)
+
+            right_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            paned.add2(right_box)
+
+            # Text entry search field
+            self.kb_search_entry = Gtk.Entry(placeholder_text=_("Type to search shortcuts"))
+            self.kb_search_handler_id = self.kb_search_entry.connect("changed", self.on_kb_search_changed)
+
+            # Binding entry search field
+            self.kb_search_frame = Gtk.Frame()
+            self.kb_search_frame.set_shadow_type(Gtk.ShadowType.IN)
+            frame_style = self.kb_search_frame.get_style_context()
+            frame_style.add_class("view")
+            self.color_found, self.placeholder_rgba = frame_style.lookup_color("placeholder_text_color")
+            self.kb_search_frame.set_no_show_all(True)
+            self.kb_search_binding = ButtonKeybinding()
+            self.kb_search_binding.set_valign(Gtk.Align.CENTER)
+            self.kb_search_binding.keybinding_cell.default_value = False
+            tooltip_text = _("Press Escape to cancel the search.")
+            self.kb_search_binding.set_tooltip_text(tooltip_text)
+            text_string = _("Click to search by accelerator")
+            self.kb_search_binding.keybinding_cell.text_string = text_string
+            if self.color_found:
+                self.kb_search_binding.keybinding_cell.set_property("foreground-rgba", self.placeholder_rgba)
+            self.kb_search_binding.connect('accel-edited', self.onSearchBindingChanged)
+            self.kb_search_binding.connect('accel-cleared', self.onSearchBindingCleared)
+            self.kb_search_frame.add(self.kb_search_binding)
+
+            # Search option dropdown
+            self.kb_search_type = Gtk.ComboBox()
+            options = [(_("Shortcuts"), "shortcuts"),
+                       (_("Bindings"), "bindings")]
+            model = Gtk.ListStore(str, str)
+            for option in options:
+                model.append(option)
+            self.kb_search_type.set_model(model)
+            cell = Gtk.CellRendererText()
+            self.kb_search_type.pack_start(cell, False)
+            self.kb_search_type.add_attribute(cell, "text", 0)
+            self.kb_search_type.set_active(0)
+            self.kb_search_type.connect("changed", self.on_kb_search_type_changed)
+
+            # Search menu
+            self.search_vbox.pack_start(self.kb_search_entry, True, True, 2)
+            self.search_vbox.pack_start(self.kb_search_frame, True, True, 2)
+            self.search_vbox.pack_end(self.kb_search_type, False, False, 2)
+            right_box.pack_start(self.search_vbox, False, False, 2)
 
             right_scroller = Gtk.ScrolledWindow.new(None, None)
             right_scroller.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.NEVER)
             right_scroller.add(right_vbox)
-            paned.add2(right_scroller)
+            right_box.pack_start(right_scroller, True, True, 2)
 
             category_scroller = Gtk.ScrolledWindow.new(None, None)
             category_scroller.set_shadow_type(Gtk.ShadowType.IN)
@@ -302,13 +173,21 @@ class Module:
             right_vbox.pack_start(kb_name_scroller, True, True, 2)
             right_vbox.pack_start(entry_scroller, True, True, 2)
             kb_name_scroller.set_property('min-content-height', 150)
-            self.cat_tree = Gtk.TreeView.new()
-            self.kb_tree = Gtk.TreeView.new()
-            self.entry_tree = Gtk.TreeView.new()
+            self.cat_tree = Gtk.TreeView(enable_search=False, search_column=-1)
+            self.kb_tree = Gtk.TreeView(enable_search=False, search_column=-1)
+            self.entry_tree = Gtk.TreeView(enable_search=False, search_column=-1)
 
             self.kb_tree.connect('row-activated', self.onCustomKeyBindingEdited)
-            self.kb_tree.connect('button-press-event', self.onContextMenuPopup)
-            self.kb_tree.connect('popup-menu', self.onContextMenuPopup)
+            self.kb_tree.connect('button-release-event', self.onContextMenuPopup)
+            self.kb_tree.connect('key-release-event', self.onContextMenuPopup)
+            self.kb_tree.connect('map', self.bindingHighlightOnMap)
+            self.kb_tree.connect('focus-in-event', self.bindingHighlightOnMap)
+            self.kb_tree.connect('unmap', self.bindingHighlightOnUnmap)
+            self.kb_tree.connect('focus-out-event', self.bindingHighlightOnUnmap)
+            self.kb_tree.connect('destroy', self.bindingHighlightOff)
+
+            self.entry_tree.connect('focus-in-event', self.bindingHighlightOnMap)
+            self.entry_tree.connect('focus-out-event', self.bindingHighlightOnUnmap)
 
             left_vbox.pack_start(category_scroller, True, True, 2)
 
@@ -335,15 +214,20 @@ class Module:
             self.cat_store = Gtk.TreeStore(str,     # Icon name or None
                                            str,     # The category name
                                            object)  # The category object
+            self.cat_store.set_sort_column_id(1, Gtk.SortType.ASCENDING)
 
-            self.kb_store = Gtk.ListStore( str,   # Keybinding name
-                                           object)# The keybinding object
+            self.kb_root_store = Gtk.ListStore(str,     # Keybinding name
+                                               object)  # The keybinding object
 
-            self.entry_store = Gtk.ListStore(str) # Accel string
+            self.kb_store = Gtk.TreeModelFilter(child_model=self.kb_root_store)
+            self.kb_store.set_visible_func(self.kb_store_visible_func)
+
+            self.entry_store = Gtk.ListStore(str)  # Accel string
 
             cell = Gtk.CellRendererText()
-            cell.set_alignment(0,0)
+            cell.set_alignment(0, 0)
             pb_cell = Gtk.CellRendererPixbuf()
+            pb_cell.set_property("xpad", 3)
             cat_column = Gtk.TreeViewColumn(_("Categories"))
             cat_column.pack_start(pb_cell, False)
             cat_column.pack_start(cell, True)
@@ -354,43 +238,44 @@ class Module:
             cat_column.set_property('min-width', 200)
 
             self.cat_tree.append_column(cat_column)
-            self.cat_tree.set_search_column(1)
             self.cat_tree.connect("cursor-changed", self.onCategoryChanged)
+            self.cat_tree.connect("button-release-event", self.onCategorySelected)
+            self.cat_tree.connect("key-release-event", self.onCategorySelected)
+            self.cat_tree.connect("map", self.categoryHighlightOnMap)
+            self.cat_tree.connect("focus-in-event", self.categoryHighlightOnMap)
+            self.cat_tree.connect("unmap", self.categoryHighlightUnmap)
+            self.cat_tree.connect("destroy", self.categoryHighlightOff)
 
             kb_name_cell = Gtk.CellRendererText()
-            kb_name_cell.set_alignment(.5,.5)
+            kb_name_cell.set_alignment(.5, .5)
             kb_column = Gtk.TreeViewColumn(_("Keyboard shortcuts"), kb_name_cell, text=0)
+            kb_column.set_cell_data_func(kb_name_cell, self.kb_name_cell_data_func)
             kb_column.set_alignment(.5)
             self.kb_tree.append_column(kb_column)
             self.kb_tree.connect("cursor-changed", self.onKeyBindingChanged)
 
             entry_cell = CellRendererKeybinding(self.entry_tree)
-            entry_cell.set_alignment(.5,.5)
+            entry_cell.set_alignment(.5, .5)
             entry_cell.connect('accel-edited', self.onEntryChanged, self.entry_store)
             entry_cell.connect('accel-cleared', self.onEntryCleared, self.entry_store)
             entry_cell.set_property('editable', True)
 
             entry_column = Gtk.TreeViewColumn(_("Keyboard bindings"), entry_cell, accel_string=0)
+            entry_column.connect("clicked", self.bindingHighlightOnMap)
             entry_column.set_alignment(.5)
             self.entry_tree.append_column(entry_column)
 
             self.entry_tree.set_tooltip_text(CellRendererKeybinding.TOOLTIP_TEXT)
+            self.current_category = None
 
-            self.main_store = []
-
-            for cat in CATEGORIES:
-                self.main_store.append(KeyBindingCategory(cat[0], cat[1], cat[2], cat[3]))
-
-            for binding in KEYBINDINGS:
-                for category in self.main_store:
-                    if category.int_name == binding[3]:
-                        category.add(KeyBinding(binding[0], binding[1], binding[2], binding[3]))
+            self.kb_table = KeybindingTable.get_default()
+            self.kb_table_check_done = False
 
             cat_iters = {}
             longest_cat_label = " "
 
-            for category in self.main_store:
-                if category.parent == None:
+            for category in self.kb_table.main_store:
+                if not category.parent:
                     cat_iters[category.int_name] = self.cat_store.append(None)
                 else:
                     cat_iters[category.int_name] = self.cat_store.append(cat_iters[category.parent])
@@ -402,372 +287,476 @@ class Module:
                     longest_cat_label = category.label
 
             layout = self.cat_tree.create_pango_layout(longest_cat_label)
-            w, h = layout.get_pixel_size()
+            w, *__ = layout.get_pixel_size()
 
             paned.set_position(max(w, 200))
 
-            self.loadCustoms()
             self.cat_tree.set_model(self.cat_store)
             self.kb_tree.set_model(self.kb_store)
             self.entry_tree.set_model(self.entry_store)
 
+            self.populate_kb_tree()
+            self.kb_table.connect("binding-changed", self.on_kb_changed)
+            self.kb_table.connect("spices-changed", lambda table: self.reload_spices())
+            self.kb_table.connect("customs-changed", lambda table: self.reload_customs())
+
             vbox.pack_start(headingbox, True, True, 0)
 
-            vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-            vbox.set_border_width(6)
-            vbox.set_spacing(6)
-            self.sidePage.stack.add_titled(vbox, "layouts", _("Layouts"))
-            try:
-                widget = self.sidePage.content_box.c_manager.get_c_widget("region")
-            except:
-                widget = None
+            page = InputSources.InputSourceSettingsPage()
+            self.sidePage.stack.add_titled(page, "layouts", _("Layouts"))
 
-            if widget is not None:
-                cheat_box = Gtk.Box.new(Gtk.Orientation.VERTICAL, 2)
-                cheat_box.pack_start(widget, True, True, 2)
-                cheat_box.set_vexpand(False)
-                widget.show()
-                vbox.pack_start(cheat_box, True, True, 0)
+            page = SettingsPage()
+            self.sidePage.stack.add_titled(page, "xkb-options", _("XKB Options"))
 
-    def addNotebookTab(self, tab):
-        self.notebook.append_page(tab.tab, Gtk.Label.new(tab.name))
-        self.tabs.append(tab)
+            page.pack_start(XkbSettings.XkbSettingsEditor(), True, True, 0)
 
-    def onCategoryChanged(self, tree):
-        self.kb_store.clear()
-        if tree.get_selection() is not None:
-            categories, iter = tree.get_selection().get_selected()
-            if iter:
-                category = categories[iter][2]
-                if category.int_name != "custom":
-                    for keybinding in category.keybindings:
-                        self.kb_store.append((keybinding.label, keybinding))
-                else:
-                    self.loadCustoms()
-            self.remove_custom_button.set_property('sensitive', False)
+            self.kb_search_entry.grab_focus()
 
-    def loadCustoms(self):
-        for category in self.main_store:
-            if category.int_name == "custom":
-                category.clear()
+    def on_kb_changed(self, kb_table):
+        self.onKeyBindingChanged(self.kb_tree)
 
-        parent = Gio.Settings.new(CUSTOM_KEYS_PARENT_SCHEMA)
-        custom_list = parent.get_strv("custom-list")
+    def stack_page_changed(self, stack, pspec, data=None):
+        if stack.get_visible_child_name() == "shortcuts":
+            if not self.kb_table_check_done:
+                GLib.idle_add(lambda: self.kb_table.check_for_collisions())
+                self.kb_table_check_done = True
 
-        for entry in custom_list:
-            if entry == DUMMY_CUSTOM_ENTRY:
+            # we grab_focus() twice to work-around a potential search exception
+            self.cat_tree.grab_focus()
+            self.kb_search_entry.grab_focus()
+
+    def onCategorySelected(self, tree, event=None):
+        for mask in MASKS:
+            if hasattr(event, "state") and event.state & mask == mask:
+                return
+
+        # Remove the highlight due to a binding if it exists
+        if self.last_selected_binding:
+            self.bindingHighlightOnUnmap()
+
+        model, tree_iter = tree.get_selection().get_selected()
+        category = model.get_value(tree_iter, 2) if tree_iter else None
+        if category and self.search_choice == "bindings":
+            self.onSearchBindingCleared(None)
+            self.categoryHighlightOnMap()
+
+        if not category or not category.dbus_info.get("highlight", False):
+            self.categoryHighlightUnmap()
+            return
+
+        # If the category hasn't changed, do nothing
+        if self.last_selected_category and self.last_selected_category == category:
+            self.categoryHighlightOnMap()
+            return
+
+        if hasattr(event, "type") and event.type != Gdk.EventType.FOCUS_CHANGE:
+            self.categoryHighlightUnmap()
+
+        self.last_selected_category = category
+
+        # Turn highlighting on (if applicable) if the category switched
+        self.categoryHighlightOnMap()
+
+    def onCategoryChanged(self, tree, *args):
+        self.kb_search_entry.handler_block(self.kb_search_handler_id)
+        self.kb_search_entry.set_text("")
+        self.kb_search_entry.handler_unblock(self.kb_search_handler_id)
+
+        if tree.get_selection():
+            categories, tree_iter = tree.get_selection().get_selected()
+            if tree_iter:
+                category = categories.get_value(tree_iter, 2)
+                self.current_category = category
+                self.kb_store.refilter()
+
+                self.remove_custom_button.set_property("sensitive", category.int_name == "custom")
+
+    def on_kb_search_changed(self, entry, data=None):
+        self.cat_tree.get_selection().unselect_all()
+        self.bindingHighlightOnUnmap()
+        self.current_category = None
+        self.last_selected_category = None
+        self.last_selected_binding = None
+        self.kb_store.refilter()
+
+    def on_kb_search_type_changed(self, entry):
+        model = self.kb_search_type.get_model()
+        option = self.kb_search_type.get_active()
+        self.search_choice = model[option][1]
+
+        if self.search_choice == "shortcuts":
+            self.onSearchBindingCleared(None)
+            self.kb_search_frame.hide()
+            self.kb_search_binding.hide()
+            self.kb_search_entry.show()
+        else:
+            self.kb_search_entry.handler_block(self.kb_search_handler_id)
+            self.kb_search_entry.set_text("")
+            self.kb_search_entry.handler_unblock(self.kb_search_handler_id)
+            self.kb_store.refilter()
+            self.kb_search_entry.hide()
+            self.kb_search_binding.show()
+            self.kb_search_frame.show()
+
+        self.bindingHighlightOnUnmap()
+        self.categoryHighlightUnmap()
+
+    def populate_kb_tree(self):
+        self.kb_root_store.clear()
+        self.current_category = None
+        self.kb_search_entry.handler_block(self.kb_search_handler_id)
+        self.kb_search_entry.set_text("")
+        self.kb_search_entry.handler_unblock(self.kb_search_handler_id)
+
+        for category in self.kb_table.main_store:
+            for keybinding in category.keybindings:
+                self.kb_root_store.append((keybinding.label, keybinding))
+
+    def reload_customs(self):
+        tree_iter = self.kb_root_store.get_iter_first()
+
+        while tree_iter:
+            # Removing a row moves the iter to the next row, which may also be
+            # custom, so we don't want to call iter_next() until we hit a row
+            # that isn't, otherwise we may skip one.
+            keybinding = self.kb_root_store.get_value(tree_iter, 1)
+            if keybinding.category == "custom":
+                if not self.kb_root_store.remove(tree_iter):
+                    break
                 continue
 
-            custom_path = CUSTOM_KEYS_BASENAME+"/"+entry+"/"
-            schema = Gio.Settings.new_with_path(CUSTOM_KEYS_SCHEMA, custom_path)
-            custom_kb = CustomKeyBinding(entry,
-                                         schema.get_string("name"),
-                                         schema.get_string("command"),
-                                         schema.get_strv("binding"))
-            self.kb_store.append((custom_kb.label, custom_kb))
-            for category in self.main_store:
-                if category.int_name == "custom":
-                    category.add(custom_kb)
+            tree_iter = self.kb_root_store.iter_next(tree_iter)
+
+        for category in self.kb_table.custom_store:
+            for keybinding in category.keybindings:
+                self.kb_root_store.append((keybinding.label, keybinding))
+
+    def reload_spices(self):
+        tree_iter = self.kb_root_store.get_iter_first()
+
+        while tree_iter:
+            keybinding = self.kb_root_store.get_value(tree_iter, 1)
+            if keybinding.category not in (*self.kb_table.static_categories.keys(), "custom"):
+                if not self.kb_root_store.remove(tree_iter):
+                    break
+                continue
+
+            tree_iter = self.kb_root_store.iter_next(tree_iter)
+
+        for category in self.kb_table.spice_store:
+            for keybinding in category.keybindings:
+                self.kb_root_store.append((keybinding.label, keybinding))
+
+    def kb_name_cell_data_func(self, column, cell, model, tree_iter, data=None):
+        binding = model.get_value(tree_iter, 1)
+
+        if binding and self.kb_search_entry.get_text() or self.kb_search_binding.get_accel_string():
+            category = escape(self.kb_table.binding_categories[binding.category])
+            __, *num = binding.category.split("_")
+            _id = f" {num[0]}" if num else ""
+            label = escape(binding.label)
+            markup = f"<span font_weight='ultra-light'>({category}{_id})</span> {label}"
+            cell.set_property("markup", markup)
+        else:
+            cell.set_property("text", binding.label)
+
+    def kb_store_visible_func(self, model, tree_iter, data=None):
+        if self.search_choice == "shortcuts":
+            if not self.current_category and not self.kb_search_entry.get_text():
+                return False
+
+            keybinding = self.kb_root_store.get_value(tree_iter, 1)
+
+            search = self.kb_search_entry.get_text().lower().strip()
+            if search:
+                return search in keybinding.label.lower().strip()
+
+            if self.current_category and hasattr(self.current_category, 'int_name'):
+                return keybinding.category == self.current_category.int_name
+        else:
+            if not self.current_category and not self.kb_search_binding.get_accel_string():
+                return False
+
+            keybinding = self.kb_root_store.get_value(tree_iter, 1)
+
+            search = self.kb_search_binding.get_accel_string()
+            if search:
+                entries = [Gtk.accelerator_parse_with_keycode(entry) for entry in keybinding.entries]
+                return Gtk.accelerator_parse_with_keycode(search) in entries
+
+            if self.current_category and hasattr(self.current_category, 'int_name'):
+                return keybinding.category == self.current_category.int_name
 
     def onKeyBindingChanged(self, tree):
         self.entry_store.clear()
-        if tree.get_selection() is not None:
-            keybindings, iter = tree.get_selection().get_selected()
-            if iter:
-                keybinding = keybindings[iter][1]
+
+        if tree.get_selection():
+            keybindings, tree_iter = tree.get_selection().get_selected()
+            if tree_iter and self.search_choice == "bindings" and self.kb_search_binding.accel_string:
+                pass
+            elif tree_iter and self.search_choice == "bindings" and self.last_accel_string and self.kb_search_binding.accel_string:
+                if self.last_accel_string != self.kb_search_binding.accel_string:
+                    if self.color_found:
+                        self.kb_search_binding.keybinding_cell.set_property("foreground-rgba", self.placeholder_rgba)
+                    self.last_accel_string = self.kb_search_binding.accel_string
+                    self.kb_search_binding.keybinding_cell.set_value(None)
+                    self.kb_search_binding.accel_string = ""
+                    self.kb_search_binding.load_model()
+
+            if tree_iter:
+                keybinding = keybindings.get_value(tree_iter, 1)
                 for entry in keybinding.entries:
                     if entry != "_invalid_":
                         self.entry_store.append((entry,))
-                self.remove_custom_button.set_property('sensitive', isinstance(keybinding, CustomKeyBinding))
+                self.remove_custom_button.set_property('sensitive', isinstance(keybinding, KeybindingTable.CustomKeyBinding))
+
+            if self.search_choice == "bindings" and self.kb_search_binding.accel_string:
+                self.last_accel_string = self.kb_search_binding.accel_string
 
     def onEntryChanged(self, cell, path, accel_string, accel_label, entry_store):
-        iter = entry_store.get_iter(path)
         keybindings, kb_iter = self.kb_tree.get_selection().get_selected()
         if kb_iter:
-            current_keybinding = keybindings[kb_iter][1]
+            current_keybinding = keybindings.get_value(kb_iter, 1)
 
-        # Check for duplicates
-        for category in self.main_store:
-            for keybinding in category.keybindings:
-                for entry in keybinding.entries:
-                    found = False
-                    if Gtk.accelerator_parse_with_keycode(accel_string) == Gtk.accelerator_parse_with_keycode(entry):
-                        found = True
+        self.kb_table.maybe_update_binding(current_keybinding, accel_string, accel_label, int(path))
 
-                    if found and keybinding.label != current_keybinding.label:
-                        dialog = Gtk.MessageDialog(None,
-                                                   Gtk.DialogFlags.DESTROY_WITH_PARENT,
-                                                   Gtk.MessageType.QUESTION,
-                                                   Gtk.ButtonsType.YES_NO,
-                                                   None)
-                        dialog.set_default_size(400, 200)
-                        msg = _("This key combination, <b>%(combination)s</b> is currently in use by <b>%(old)s</b>.  ")
-                        msg += _("If you continue, the combination will be reassigned to <b>%(new)s</b>.\n\n")
-                        msg += _("Do you want to continue with this operation?")
-                        dialog.set_markup(msg % {'combination':html.escape(accel_label), 'old':html.escape(keybinding.label), 'new':html.escape(current_keybinding.label)})
-                        dialog.show_all()
-                        response = dialog.run()
-                        dialog.destroy()
-                        if response == Gtk.ResponseType.YES:
-                            keybinding.setBinding(keybinding.entries.index(entry), None)
-                        else:
-                            return
-        current_keybinding.setBinding(int(path), accel_string)
-        self.onKeyBindingChanged(self.kb_tree)
         self.entry_tree.get_selection().select_path(path)
 
     def onEntryCleared(self, cell, path, entry_store):
-        iter = entry_store.get_iter(path)
         keybindings, kb_iter = self.kb_tree.get_selection().get_selected()
         if kb_iter:
-            current_keybinding = keybindings[kb_iter][1]
-        current_keybinding.setBinding(int(path), None)
-        self.onKeyBindingChanged(self.kb_tree)
+            current_keybinding = keybindings.get_value(kb_iter, 1)
+            self.kb_table.clear_binding(current_keybinding, int(path))
+
         self.entry_tree.get_selection().select_path(path)
+
+    def onSearchBindingChanged(self, cell, path, accel_string):
+        if self.color_found:
+            self.kb_search_binding.keybinding_cell.set_property("foreground-rgba", None)
+        self.kb_store.refilter()
+        self.current_category = None
+        self.cat_tree.get_selection().unselect_all()
+        self.bindingHighlightOff()
+
+    def onSearchBindingCleared(self, cell):
+        if self.color_found:
+            self.kb_search_binding.keybinding_cell.set_property("foreground-rgba", self.placeholder_rgba)
+        self.kb_search_binding.keybinding_cell.set_value(None)
+        self.kb_search_binding.accel_string = ""
+        self.kb_search_binding.load_model()
+        self.kb_store.refilter()
 
     def onAddCustomButtonClicked(self, button):
         dialog = AddCustomDialog(False)
 
         dialog.show_all()
         response = dialog.run()
-        if response == Gtk.ResponseType.CANCEL or response == Gtk.ResponseType.DELETE_EVENT:
+        if response in (Gtk.ResponseType.CANCEL, Gtk.ResponseType.DELETE_EVENT):
             dialog.destroy()
             return
 
-        parent = Gio.Settings.new(CUSTOM_KEYS_PARENT_SCHEMA)
-        array = parent.get_strv("custom-list")
-        num_array = []
-        for entry in array:
-            if entry == DUMMY_CUSTOM_ENTRY:
-                continue
+        self.kb_table.add_custom_keybinding(dialog.name_entry.get_text(),
+                                            dialog.command_entry.get_text())
 
-            num_array.append(int(entry.replace("custom", "")))
-        num_array.sort()
+        self.reload_customs()
+        self.kb_store.refilter()
 
-        i = 0
-        while True:
-            if i in num_array:
-                i += 1
-            else:
-                break
-
-        new_str = "custom" + str(i)
-        array.append(new_str)
-        ensureCustomListIsValid(array);
-        parent.set_strv("custom-list", array)
-
-        new_path = CUSTOM_KEYS_BASENAME + "/custom" + str(i) + "/"
-        new_schema = Gio.Settings.new_with_path(CUSTOM_KEYS_SCHEMA, new_path)
-        new_schema.set_string("name", dialog.name_entry.get_text())
-        new_schema.set_string("command", dialog.command_entry.get_text().replace("%20", "\ "))
-        new_schema.set_strv("binding", ())
-        i = 0
-        for cat in self.cat_store:
+        for index, cat in enumerate(self.cat_store):
             if cat[2].int_name == "custom":
-                self.cat_tree.set_cursor(str(i), self.cat_tree.get_column(0), False)
-            i += 1
-        i = 0
-        for keybinding in self.kb_store:
+                self.cat_tree.set_cursor(str(index), self.cat_tree.get_column(0), False)
+
+        for index, keybinding in enumerate(self.kb_store):
             if keybinding[0] == dialog.name_entry.get_text():
-                self.kb_tree.set_cursor(str(i), self.kb_tree.get_column(0), False)
-            i += 1
+                self.kb_tree.set_cursor(str(index), self.kb_tree.get_column(0), False)
+
         dialog.destroy()
 
     def onRemoveCustomButtonClicked(self, button):
-        keybindings, iter = self.kb_tree.get_selection().get_selected()
-        if iter:
-            keybinding = keybindings[iter][1]
+        keybindings, tree_iter = self.kb_tree.get_selection().get_selected()
+        if tree_iter:
+            keybinding = keybindings.get_value(tree_iter, 1)
+            self.kb_table.remove_custom_keybinding(keybinding)
 
-            custom_path = CUSTOM_KEYS_BASENAME + "/" + keybinding.path + "/"
-            custom_schema = Gio.Settings.new_with_path(CUSTOM_KEYS_SCHEMA, custom_path)
-            custom_schema.delay()
-            custom_schema.reset("name")
-            custom_schema.reset("command")
-            custom_schema.reset("binding")
-            custom_schema.apply()
-            Gio.Settings.sync()
+        self.reload_customs()
+        self.kb_store.refilter()
 
-            parent_settings = Gio.Settings(CUSTOM_KEYS_PARENT_SCHEMA)
-            array = parent_settings.get_strv("custom-list")
-
-            existing = False
-            for entry in array:
-                if keybinding.path == entry:
-                    existing = True
-                    break
-            if existing:
-                array.remove(keybinding.path)
-                ensureCustomListIsValid(array)
-                parent_settings.set_strv("custom-list", array)
-
-        i = 0
-        for cat in self.cat_store:
+        for index, cat in enumerate(self.cat_store):
             if cat[2].int_name == "custom":
-                self.cat_tree.set_cursor(str(i), self.cat_tree.get_column(0), False)
-            i += 1
+                self.cat_tree.set_cursor(str(index), self.cat_tree.get_column(0), False)
 
     def onCustomKeyBindingEdited(self, kb_treeview, column, kb_column):
-        keybindings, iter = kb_treeview.get_selection().get_selected()
-        if iter:
-            keybinding = keybindings[iter][1]
-            if isinstance(keybinding, KeyBinding):
+        keybindings, tree_iter = kb_treeview.get_selection().get_selected()
+        if tree_iter:
+            keybinding = keybindings.get_value(tree_iter, 1)
+            if isinstance(keybinding, KeybindingTable.KeyBinding):
                 return
-            else:
-                dialog = AddCustomDialog(True)
-                dialog.name_entry.set_text(keybinding.label)
-                dialog.command_entry.set_text(keybinding.action)
-                dialog.show_all()
-                response = dialog.run()
-                if response != Gtk.ResponseType.OK:
-                    dialog.destroy()
-                    return
-
-                keybinding.label = dialog.name_entry.get_text()
-                keybinding.action = dialog.command_entry.get_text().replace("%20", "\ ")
-                keybinding.writeSettings();
-
-                i = 0
-                for cat in self.cat_store:
-                    if cat[2].int_name == "custom":
-                        self.cat_tree.set_cursor(str(i), self.cat_tree.get_column(0), False)
-                    i += 1
-                i = 0
-                for keybinding in self.kb_store:
-                    if keybinding[0] == dialog.name_entry.get_text():
-                        self.kb_tree.set_cursor(str(i), self.kb_tree.get_column(0), False)
-                    i += 1
+            dialog = AddCustomDialog(True)
+            dialog.name_entry.set_text(keybinding.label)
+            dialog.command_entry.set_text(keybinding.action)
+            dialog.show_all()
+            response = dialog.run()
+            if response != Gtk.ResponseType.OK:
                 dialog.destroy()
+                return
 
-    def onContextMenuPopup(self, tree, event = None):
-        model, iter = tree.get_selection().get_selected()
-        if iter:
-            keybinding = model[iter][1]
-            if isinstance(keybinding, CustomKeyBinding):
+            self.kb_table.update_custom_keybinding_details(keybinding, dialog.name_entry.get_text(), dialog.command_entry.get_text())
+
+            self.reload_customs()
+            self.kb_store.refilter()
+
+            for index, cat in enumerate(self.cat_store):
+                if cat[2].int_name == "custom":
+                    self.cat_tree.set_cursor(str(index), self.cat_tree.get_column(0), False)
+            for index, keybinding in enumerate(self.kb_store):
+                if keybinding[0] == dialog.name_entry.get_text():
+                    self.kb_tree.set_cursor(str(index), self.kb_tree.get_column(0), False)
+
+            dialog.destroy()
+
+    def onContextMenuPopup(self, tree, event=None):
+        for mask in MASKS:
+            if hasattr(event, 'state') and event.state & mask == mask:
+                return
+        model, tree_iter = tree.get_selection().get_selected()
+        binding = model.get_value(tree_iter, 1) if tree_iter else None
+        if self.last_selected_binding and self.last_selected_binding != binding:
+            self.bindingHighlightOnUnmap()
+
+        search_input_text = False
+        if self.kb_search_entry.get_text():
+            search_input_text = True
+
+        if binding and hasattr(binding, "category"):
+            for index, category in enumerate(self.cat_store):
+                if category[2].int_name == binding.category:
+                    if not category[2].parent:
+                        self.cat_tree.set_cursor(Gtk.TreePath(str(index)), None, False)
+                        break
+            else:
+                for category in self.kb_table.main_store:
+                    if category.int_name == binding.category:
+                        cat_iter = self.recurseCatTree(self.cat_store.get_iter_first(), binding.category)
+                        _path = self.cat_store.get_path(cat_iter)
+                        self.cat_tree.expand_to_path(_path)
+                        self.cat_tree.set_cursor(_path)
+                        break
+
+
+        if not self.current_category:
+            for cat in self.kb_table.main_store:
+                if cat.int_name == binding.category:
+                    self.current_category = cat
+                    break
+
+        if binding == self.last_selected_binding:
+            if event and event.type != Gdk.EventType.BUTTON_RELEASE or event.button != 3:
+                return Gdk.EVENT_PROPAGATE
+
+        self.last_selected_binding = binding
+        self.bindingHighlightOnMap()
+
+        if tree_iter:
+            if search_input_text or self.kb_search_binding.accel_string:
+                self.onSearchBindingCleared(None)
+                return
+            if isinstance(binding, KeybindingTable.CustomKeyBinding):
                 return
             if event:
-                if event.button != 3:
+                if event.type != Gdk.EventType.BUTTON_RELEASE or event.button != 3:
                     return
                 button = event.button
                 event_time = event.time
                 info = tree.get_path_at_pos(int(event.x), int(event.y))
-                if info is not None:
-                    path, col, cellx, celly = info
+                if info:
+                    path, col, *__ = info
                     tree.grab_focus()
                     tree.set_cursor(path, col, 0)
             else:
-                path = model.get_path(iter)
+                path = model.get_path(tree_iter)
                 button = 0
                 event_time = 0
                 tree.grab_focus()
+
             popup = Gtk.Menu()
             popup.attach_to_widget(tree, None)
             popup_reset_item = Gtk.MenuItem(_("Reset to default"))
             popup_reset_item.show()
             popup.append(popup_reset_item)
-            popup_reset_item.connect('activate', self.onResetToDefault, keybinding)
+            popup_reset_item.connect('activate', self.onResetToDefault, binding)
             popup.popup(None, None, None, None, button, event_time)
+
             return True
 
+    def recurseCatTree(self, tree_iter, binding_category):
+        result = None
+        model = self.cat_tree.get_model()
+        while not result and tree_iter:
+            category_name = model.get_value(tree_iter, 2).int_name
+            if category_name == binding_category:
+                result = tree_iter
+                break
+            if self.cat_store.iter_has_child(tree_iter):
+                child_iter = self.cat_store.iter_children(tree_iter)
+                result = self.recurseCatTree(child_iter, binding_category)
+            tree_iter = self.cat_store.iter_next(tree_iter)
+        return result
+
     def onResetToDefault(self, popup, keybinding):
-        keybinding.resetDefaults()
-        self.onKeyBindingChanged(self.kb_tree)
+        self.kb_table.reset_bindings(keybinding)
 
-class KeyBindingCategory():
-    def __init__(self, label, int_name, parent, icon):
-        self.label = label
-        self.parent = parent
-        self.icon = icon
-        self.int_name = int_name
-        self.keybindings = []
+    def categoryHighlightOnMap(self, *args):
+        # Turn highlighting on (if applicable)
+        try:
+            if self.last_selected_category.dbus_info["highlight"]:
+                uuid = self.last_selected_category.dbus_info["uuid"]
+                _id = self.last_selected_category.dbus_info["instance_id"]
+                self.kb_table.highlight_spice(uuid, _id, True)
+        except (KeyError, AttributeError):
+            pass
 
-    def add(self, keybinding):
-        self.keybindings.append(keybinding)
+    def categoryHighlightUnmap(self, *args):
+        # Turn highlighting off (if applicable)
+        try:
+            if self.last_selected_category.dbus_info["highlight"]:
+                uuid = self.last_selected_category.dbus_info["uuid"]
+                _id = self.last_selected_category.dbus_info["instance_id"]
+                self.kb_table.highlight_spice(uuid, _id, False)
+        except (KeyError, AttributeError):
+            pass
 
-    def clear(self):
-        del self.keybindings[:]
+    def categoryHighlightOff(self, *args):
+        # Unset highlighting (if applicable) e.g. when closing the window
+        self.categoryHighlightUnmap()
 
-class KeyBinding():
-    def __init__(self, label, schema, key, category):
-        self.key = key
-        self.label = label
-        self.entries = [ ]
-        self.settings = Gio.Settings.new(schema)
-        self.loadSettings()
+        self.last_selected_category = None
 
-    def loadSettings(self):
-        del self.entries[:]
-        self.entries = self.get_array(self.settings.get_strv(self.key))
+    def bindingHighlightOnMap(self, *args):
+        # Turn highlighting on (if applicable)
 
-    def get_array(self, raw_array):
-        result = []
+        try:
+            if self.last_selected_binding.dbus_info["highlight"]:
+                uuid = self.last_selected_binding.dbus_info["uuid"]
+                _id = self.last_selected_binding.dbus_info["instance_id"]
+                self.kb_table.highlight_spice(uuid, _id, True)
+        except (KeyError, AttributeError):
+            pass
 
-        for entry in raw_array:
-            result.append(entry)
-        while (len(result) < 3):
-            result.append("")
+    def bindingHighlightOnUnmap(self, *args):
+        # Turn highlighting off (if applicable)
 
-        return result
+        try:
+            if self.last_selected_binding.dbus_info["highlight"]:
+                uuid = self.last_selected_binding.dbus_info["uuid"]
+                _id = self.last_selected_binding.dbus_info["instance_id"]
+                self.kb_table.highlight_spice(uuid, _id, False)
+        except (KeyError, AttributeError):
+            pass
 
-    def setBinding(self, index, val):
-        if val is not None:
-            self.entries[index] = val
-        else:
-            self.entries[index] = ""
-        self.writeSettings()
+    def bindingHighlightOff(self, *args):
+        # Unset highlighting (if applicable) e.g. when closing the window
+        self.bindingHighlightOnUnmap()
 
-    def writeSettings(self):
-        array = []
-        for entry in self.entries:
-            if entry != "":
-                array.append(entry)
-        self.settings.set_strv(self.key, array)
-
-    def resetDefaults(self):
-        self.settings.reset(self.key)
-        self.loadSettings()
-
-class CustomKeyBinding():
-    def __init__(self, path, label, action, binding):
-        self.path = path
-        self.label = label
-        self.action = action
-        self.entries = self.get_array(binding)
-
-    def get_array(self, raw_array):
-        result = []
-
-        for entry in raw_array:
-            result.append(entry)
-        while (len(result) < 3):
-            result.append("")
-        return result
-
-    def setBinding(self, index, val):
-        if val is not None:
-            self.entries[index] = val
-        else:
-            self.entries[index] = ""
-        self.writeSettings()
-
-    def writeSettings(self):
-        custom_path = CUSTOM_KEYS_BASENAME+"/"+self.path+"/"
-        settings = Gio.Settings.new_with_path(CUSTOM_KEYS_SCHEMA, custom_path)
-
-        settings.set_string("name", self.label)
-        settings.set_string("command", self.action)
-
-        array = []
-        for entry in self.entries:
-            if entry != "":
-                array.append(entry)
-        settings.set_strv("binding", array)
-
-        # Touch the custom-list key, this will trigger a rebuild in cinnamon
-        parent = Gio.Settings.new(CUSTOM_KEYS_PARENT_SCHEMA)
-        custom_list = parent.get_strv("custom-list")
-        custom_list.reverse()
-        ensureCustomListIsValid(custom_list);
-        parent.set_strv("custom-list", custom_list)
+        self.last_selected_binding = None
 
 class AddCustomDialog(Gtk.Dialog):
     def __init__(self, edit_mode):
@@ -787,7 +776,7 @@ class AddCustomDialog(Gtk.Dialog):
         command_box.pack_start(Gtk.Label.new(_("Command:")), False, False, 2)
         self.name_entry = Gtk.Entry()
         self.name_entry.connect('changed', self.onEntriesChanged)
-        self.command_entry  = Gtk.Entry()
+        self.command_entry = Gtk.Entry()
         self.command_entry.connect('changed', self.onEntriesChanged)
         name_box.pack_start(self.name_entry, True, True, 2)
         command_box.pack_start(self.command_entry, True, True, 2)
@@ -802,9 +791,9 @@ class AddCustomDialog(Gtk.Dialog):
         self.onEntriesChanged(self)
 
     def onFilePicked(self, widget):
-        path = self.file_picker.get_uri()[7:]
-        self.command_entry.set_text(path)
+        file = self.file_picker.get_file()
+        self.command_entry.set_text(file.get_path().replace(" ", r"\ "))
 
     def onEntriesChanged(self, widget):
-        ok_enabled = self.name_entry.get_text().strip() != "" and self.command_entry.get_text().strip() != ""
+        ok_enabled = self.name_entry.get_text().strip() and self.command_entry.get_text().strip()
         self.set_response_sensitive(Gtk.ResponseType.OK, ok_enabled)

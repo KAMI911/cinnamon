@@ -27,6 +27,7 @@
 #include "st-border-image.h"
 #include "st-icon-colors.h"
 #include "st-shadow.h"
+#include "st-background-effect.h"
 
 G_BEGIN_DECLS
 
@@ -93,6 +94,12 @@ typedef enum {
   ST_GRADIENT_HORIZONTAL,
   ST_GRADIENT_RADIAL
 } StGradientType;
+
+typedef enum {
+  ST_ICON_STYLE_REQUESTED,
+  ST_ICON_STYLE_REGULAR,
+  ST_ICON_STYLE_SYMBOLIC
+} StIconStyle;
 
 GType st_theme_node_get_type (void) G_GNUC_CONST;
 
@@ -191,6 +198,7 @@ int    st_theme_node_get_min_width     (StThemeNode  *node);
 int    st_theme_node_get_min_height    (StThemeNode  *node);
 int    st_theme_node_get_max_width     (StThemeNode  *node);
 int    st_theme_node_get_max_height    (StThemeNode  *node);
+StIconStyle st_theme_node_get_icon_style (StThemeNode *node);
 
 int    st_theme_node_get_transition_duration (StThemeNode *node);
 
@@ -198,12 +206,15 @@ StTextDecoration st_theme_node_get_text_decoration (StThemeNode *node);
 
 StTextAlign st_theme_node_get_text_align (StThemeNode *node);
 
+double st_theme_node_get_letter_spacing (StThemeNode *node);
+
 /* Font rule processing is pretty complicated, so we just hardcode it
  * under the standard font/font-family/font-size/etc names. This means
  * you can't have multiple separate styled fonts for a single item,
  * but that should be OK.
  */
 const PangoFontDescription *st_theme_node_get_font (StThemeNode *node);
+gchar *st_theme_node_get_font_features (StThemeNode *node);
 
 StBorderImage *st_theme_node_get_border_image (StThemeNode *node);
 StShadow      *st_theme_node_get_box_shadow   (StThemeNode *node);
@@ -248,7 +259,9 @@ gboolean st_theme_node_paint_equal    (StThemeNode *node,
 void st_theme_node_paint (StThemeNode            *node,
                           CoglFramebuffer        *framebuffer,
                           const ClutterActorBox  *box,
-                          guint8                  paint_opacity);
+                          guint8                  paint_opacity,
+                          StBackgroundBlurEffect    *background_blur_effect,
+                          StBackgroundBumpmapEffect *background_bumpmap_effect);
 
 void st_theme_node_copy_cached_paint_state (StThemeNode *node,
                                             StThemeNode *other);

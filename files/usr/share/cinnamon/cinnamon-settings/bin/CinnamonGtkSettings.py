@@ -95,7 +95,7 @@ class GtkCssEditor:
 
         self.selector = selector
 
-        self.rule_separator = "/***** %s - cinnamon-settings-generated - do not edit *****/" % self.selector
+        self.rule_separator = f"/***** {self.selector} - cinnamon-settings-generated - do not edit *****/"
         rules = []
 
         file = Gio.File.new_for_path(self._path)
@@ -368,7 +368,7 @@ class CssRange(Range):
         def apply(self):
             editor = get_css_editor()
             for name in self.decl_names:
-                value_as_str = "%d%s" % (int(self.content_widget.get_value()), self.units)
+                value_as_str = f"{int(self.content_widget.get_value()):d}{self.units}"
                 editor.set_declaration(self.selector, name, value_as_str)
 
             editor.save_stylesheet()
@@ -384,93 +384,35 @@ class PreviewWidget(SettingsWidget):
     def __init__(self):
         super(PreviewWidget, self).__init__()
 
-        self.content_widget = Gtk.Socket()
+        self.builder = Gtk.Builder()
+        self.builder.set_translation_domain('cinnamon')
+        self.builder.add_from_file("/usr/share/cinnamon/cinnamon-settings/bin/scrollbar-test-widget.glade")
+
+        self.content_widget = self.builder.get_object("content_box")
         self.content_widget.set_valign(Gtk.Align.CENTER)
-
-        # This matches the plug toplevel container, it keeps the PreviewWidget from
-        # resizing briefly when reloading the plug.
-        self.content_widget.set_size_request(-1, 100)
-        self.content_widget.connect("hierarchy-changed", self.on_widget_hierarchy_changed)
-        self.content_widget.connect("plug-removed", self.on_plug_removed)
-
-        self.file_monitor_delay = 0
-
-        self.interface_settings = Gio.Settings(schema_id="org.cinnamon.desktop.interface")
-        self.update_overlay_state()
-
+        self.scrolled_window = self.builder.get_object("scrolled_window")
         self.pack_start(self.content_widget, True, True, 0)
 
-        self.proc = None
+        self.interface_settings = Gio.Settings(schema_id="org.cinnamon.desktop.interface")
+        self.interface_settings.connect("changed::gtk-overlay-scrollbars", self.on_overlay_scrollbars_changed)
+        self.update_overlay_state()
 
     def update_overlay_state(self):
         if self.interface_settings.get_boolean("gtk-overlay-scrollbars"):
-            GLib.setenv("GTK_OVERLAY_SCROLLING", "1", True)
+            self.scrolled_window.set_overlay_scrolling(True)
         else:
-            GLib.setenv("GTK_OVERLAY_SCROLLING", "0", True)
-
-    def socket_is_anchored(self, socket):
-        toplevel = socket.get_toplevel()
-
-        is_toplevel = isinstance(toplevel, Gtk.Window)
-
-        return is_toplevel
-
-    def on_widget_hierarchy_changed(self, widget, previous_toplevel, data=None):
-        if not self.socket_is_anchored(self.content_widget):
-            self.kill_plug()
-            return
-
-        self.interface_settings.connect("changed::gtk-overlay-scrollbars", self.on_overlay_scrollbars_changed)
-        self.interface_settings.get_boolean("gtk-overlay-scrollbars")
-
-        path = os.path.join(GLib.get_user_config_dir(), "gtk-3.0")
-        file = Gio.File.new_for_path(path)
-
-        try:
-            self.config_monitor = file.monitor_directory(Gio.FileMonitorFlags.NONE, None)
-            self.config_monitor.connect("changed", self.on_config_dir_changed)
-        except GLib.Error as e:
-            print(e.message)
-
-        self.reload()
-
-    def on_plug_removed(self, socket, data=None):
-        return True
+            self.scrolled_window.set_overlay_scrolling(False)
 
     def on_overlay_scrollbars_changed(self, settings, key, data=None):
         self.update_overlay_state()
 
-        self.reload()
-
-    def on_config_dir_changed(self, monitor, file, other, event_type, data=None):
-        if event_type != Gio.FileMonitorEvent.CHANGES_DONE_HINT:
-            return
-
-        if self.file_monitor_delay > 0:
-            GObject.source_remove(self.file_monitor_delay)
-
-        self.file_monitor_delay = GObject.timeout_add(100, self.on_file_monitor_delay_finished)
-
-    def on_file_monitor_delay_finished(self, data=None):
-        self.file_monitor_delay = 0
-        self.reload()
-
-        return False
-
-    def kill_plug(self):
-        if self.proc:
-            self.proc.send_signal(signal.SIGTERM)
-            self.proc = None
-
-    def reload(self):
-        self.kill_plug()
-
-        self.proc = Gio.Subprocess.new(['python3', '/usr/share/cinnamon/cinnamon-settings/bin/scrollbar-test-widget.py', str(self.content_widget.get_id())],
-                                       Gio.SubprocessFlags.NONE)
-
 class Gtk2ScrollbarSizeEditor:
     def __init__(self, ui_scale):
-        self._path = os.path.join(GLib.get_home_dir(), ".gtkrc-2.0")
+        rcpath = GLib.getenv("GTK2_RC_FILES")
+        if rcpath:
+            self._path = rcpath.split(":")[0]
+        else:
+            self._path = os.path.join(GLib.get_home_dir(), ".gtkrc-2.0")
         self._file = Gio.File.new_for_path(self._path)
         self._settings = Gio.Settings(schema_id="org.cinnamon.theme")
         self.ui_scale = ui_scale
@@ -487,7 +429,7 @@ class Gtk2ScrollbarSizeEditor:
             if e.code == Gio.IOErrorEnum.NOT_FOUND:
                 pass
             else:
-                print("Could not load ~/.gtkrc-2.0 file: %s" % e.message)
+                print(f"Could not load .gtkrc-2.0 file: {e.message}")
 
         self.parse_contents()
 
@@ -504,7 +446,7 @@ class Gtk2ScrollbarSizeEditor:
         c = self._contents
 
         if size > 0:
-            style_prop = "GtkScrollbar::slider-width = %d" % size
+            style_prop = f"GtkScrollbar::slider-width = {size:d}"
             final_contents = c[:self.style_prop_start] + style_prop + c[self.style_prop_start:]
         else:
             final_contents = self._contents
@@ -512,13 +454,16 @@ class Gtk2ScrollbarSizeEditor:
         # print("saving changed: ", final_contents)
 
         try:
+            # If a path is specified through GTK2_RC_FILES, ensure it exists
+            if not self._file.get_parent().query_exists():
+                self._file.get_parent().make_directory_with_parents()
             self._file.replace_contents(final_contents.encode("utf-8"),
                                         None,
                                         False,
                                         0,
                                         None)
         except GLib.Error as e:
-            print("Could not save .gtkrc-2.0 file: %s" % e.message)
+            print(f"Could not save .gtkrc-2.0 file: {e.message}")
 
         self.timeout_id = 0
         return False

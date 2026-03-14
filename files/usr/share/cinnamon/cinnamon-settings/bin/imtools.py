@@ -81,7 +81,7 @@ def drop_shadow(image, horizontal_offset=5, vertical_offset=5,
         cache = {}
 
     if has_transparency(image) and image.mode != 'RGBA':
-        # Make sure 'LA' and 'P' with trasparency are handled
+        # Make sure 'LA' and 'P' with transparency are handled
         image = image.convert('RGBA')
 
     #get info
@@ -228,7 +228,7 @@ def create_corner(radius=100, opacity=255, factor=2):
     draw = ImageDraw.Draw(corner)
     draw.pieslice((0, 0, 2 * factor * radius, 2 * factor * radius),
                   180, 270, fill=opacity)
-    corner = corner.resize((radius, radius), Image.ANTIALIAS)
+    corner = corner.resize((radius, radius), Image.LANCZOS)
     return corner
 
 def get_format(ext):
@@ -369,7 +369,7 @@ def fill_background_color(image, color):
     else:
         mode = 'RGB'
     back = Image.new(mode, image.size, color)
-    if (image.mode == 'P' and mode == 'RGBA'):
+    if image.mode == 'P' and mode == 'RGBA':
         image = image.convert('RGBA')
     if has_alpha(image):
         paste(back, image, mask=image)
@@ -442,7 +442,7 @@ def generate_layer(image_size, mark, method,
             mark = mark.transpose(orientation_value)
         paste(layer, mark, location, force=True)
     else:
-        raise ValueError('Unknown method "%s" for generate_layer.' % method)
+        raise ValueError(f'Unknown method "{method}" for generate_layer.')
     return layer
 
 
@@ -620,7 +620,7 @@ def has_transparency(image):
 
 
 def get_alpha(image):
-    """Gets the image alpha band. Can handles P mode images with transpareny.
+    """Gets the image alpha band. Can handle P mode images with transparency.
     Returns a band with all values set to 255 if no alpha band exists.
 
     :param image: input image
@@ -755,7 +755,7 @@ def put_palette(image_to, image_from, palette=None):
     :param palette: image palette
     :type palette: sequence of (r, g, b) tuples or None
     """
-    if palette == None:
+    if palette is None:
         palette = get_palette(image_from)
     image_to.putpalette(flatten(palette))
     if 'transparency' in image_from.info:
@@ -826,7 +826,7 @@ def paste(destination, source, box=(0, 0), mask=None, force=False):
           with the alpha channel of the source image. So in that case the
           pixels of the destination layer will be abandoned and replaced
           by exactly the same pictures of the destination image. This is mostly
-          what you need if you paste on a transparant canvas.
+          what you need if you paste on a transparent canvas.
         - If ``False`` this will use a mask when the image has an alpha
           channel. In this case pixels of the destination image will appear
           through where the source image is transparent.
@@ -853,11 +853,11 @@ def paste(destination, source, box=(0, 0), mask=None, force=False):
             source_without_alpha = remove_alpha(source)
             # paste on top of the opaque destination pixels
             destination.paste(source_without_alpha, box, source)
-            if invert_alpha != None:
+            if invert_alpha is not None:
                 # the alpha channel is ok now, so save it
                 destination_alpha = get_alpha(destination)
-                # paste on top of the transparant destination pixels
-                # the transparant pixels of the destination should
+                # paste on top of the transparent destination pixels
+                # the transparent pixels of the destination should
                 # be filled with the color information from the source
                 destination.paste(source_without_alpha, box, invert_alpha)
                 # restore the correct alpha channel
@@ -920,7 +920,7 @@ def convert(image, mode, *args, **keyw):
         # A workaround for a PIL bug.
         # Converting from P to LA directly doesn't work.
         return image.convert('RGBA').convert('LA', *args, **keyw)
-    if has_transparency(image) and (not mode in ['RGBA', 'LA']):
+    if has_transparency(image) and (mode not in ['RGBA', 'LA']):
         if image.mode == 'P':
             image = image.convert('RGBA')
             del image.info['transparency']
@@ -962,7 +962,7 @@ def convert_save_mode_by_format(image, format):
     #TODO: Extend this helper function to support other formats as well
     if image.mode == 'P':
         # Make sure P is handled correctly
-        if not format in ['GIF', 'PNG', 'TIFF', 'IM', 'PCX']:
+        if format not in ['GIF', 'PNG', 'TIFF', 'IM', 'PCX']:
             image = remove_alpha(image)
     if format == 'JPEG':
         if image.mode in ['RGBA', 'P']:
@@ -1011,7 +1011,7 @@ def convert_save_mode_by_format(image, format):
         if image.mode in ['P', 'RGBA', 'YCbCr']:
             return image.convert('RGB')
     elif format == 'XBM':
-        if not image.mode in ['1']:
+        if image.mode not in ['1']:
             return image.convert('1')
     elif format == 'TIFF':
         if image.mode in ['YCbCr']:
@@ -1068,7 +1068,7 @@ def get_reverse_transposition(transposition):
 
 
 def get_exif_transposition(orientation):
-    """Get the transposition methods necessary to aling the image to
+    """Get the transposition methods necessary to align the image to
     its exif orientation.
 
     :param orientation: exif orientation
@@ -1175,16 +1175,16 @@ def checkboard(size, delta=8, fg=(128, 128, 128), bg=(204, 204, 204)):
     :returns: checkboard image
     :rtype: pil.Image
     """
-    if not (size in CHECKBOARD):
+    if size not in CHECKBOARD:
         dim = max(size)
         n = int(dim / delta) + 1  # FIXME: now acts like square->nx, ny
 
         def sq_start(i):
-            "Return the x/y start coord of the square at column/row i."
+            """Return the x/y start coord of the square at column/row i."""
             return i * delta
 
         def square(i, j):
-            "Return the square corners"
+            """Return the square corners"""
             return map(sq_start, [i, j, i + 1, j + 1])
 
         image = Image.new("RGB", size, bg)
@@ -1210,12 +1210,12 @@ def add_checkboard(image):
 
     :param image: image
     :type image: pil.Image
-    :returns: image, with checkboard if transparant
+    :returns: image, with checkboard if transparent
     :rtype: pil.Image
     """
     if (image.mode == 'P' and 'transparency' in image.info) or\
             image.mode.endswith('A'):
-        #transparant image
+        #transparent image
         image = image.convert('RGBA')
         image_bg = checkboard(image.size)
         paste(image_bg, image, (0, 0), image)

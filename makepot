@@ -1,14 +1,10 @@
 #!/bin/bash
+set -e
+POT="cinnamon.pot"
+xgettext -o $POT --language=C --keyword=_ --keyword=N_  src/*.c src/*/*.c
+xgettext -o $POT --join-existing --language=glade --from-code=UTF-8 $(find files/usr/share/cinnamon -name "*.ui")
+xgettext -o $POT --join-existing --language=javascript -cTranslators --keyword=_ --keyword=N_ --from-code=UTF-8 js/*/*.js files/usr/share/cinnamon/*/*/*.js
+xgettext -o $POT --join-existing --language=python -c --keyword=_ generate_additional_files.py files/usr/share/cinnamon/*/*.py files/usr/share/cinnamon/*/*/*.py files/usr/bin/*
 
-find files/usr/share/cinnamon -name "*.ui" -exec intltool-extract --type=gettext/glade {} \;
-
-xgettext --language=C --keyword=_ --keyword=N_ --output=cinnamon.pot src/*.c src/*/*.c
-
-find files/usr/share/cinnamon -name "*.ui.h" -exec xgettext --language=C --keyword=_ --keyword=N_ --output=cinnamon.pot --join-existing {} \;
-
-xgettext --language=JavaScript --keyword=_ --keyword=N_ --output=cinnamon.pot --join-existing --from-code=UTF-8 js/*/*.js files/usr/share/cinnamon/*/*/*.js
-xgettext -c --language=Python --keyword=_ --output=cinnamon.pot --join-existing generate_additional_files.py files/usr/share/cinnamon/*/*.py files/usr/share/cinnamon/*/*/*.py files/usr/bin/cinnamon-launcher files/usr/bin/xlet-about-dialog
-files/usr/bin/cinnamon-xlet-makepot -j -p -m -o cinnamon.pot files/usr/share/cinnamon/applets/
-files/usr/bin/cinnamon-xlet-makepot -j -p -m -o cinnamon.pot files/usr/share/cinnamon/desklets/
-
-find files/usr/share/cinnamon -name "*.ui.h" -exec rm -f {} \;
+files/usr/bin/cinnamon-xlet-makepot -o $POT -p -m -j files/usr/share/cinnamon/applets/
+files/usr/bin/cinnamon-xlet-makepot -o $POT -p -m -j files/usr/share/cinnamon/desklets/

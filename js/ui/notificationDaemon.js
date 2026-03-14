@@ -13,10 +13,6 @@ const MessageTray = imports.ui.messageTray;
 const Params = imports.misc.params;
 const Mainloop = imports.mainloop;
 
-// don't automatically clear these apps' notifications on window focus
-// lowercase only
-const AUTOCLEAR_BLACKLIST = ['chromium', 'firefox', 'google chrome'];
-
 let nextNotificationId = 1;
 
 // Should really be defined in Gio.js
@@ -72,18 +68,18 @@ const NotificationDaemonIface =
         </interface> \
     </node>';
 
-const NotificationClosedReason = {
+const NotificationClosedReason = Object.freeze({
     EXPIRED: 1,
     DISMISSED: 2,
     APP_CLOSED: 3,
     UNDEFINED: 4
-};
+});
 
-const Urgency = {
+const Urgency = Object.freeze({
     LOW: 0,
     NORMAL: 1,
     CRITICAL: 2
-};
+});
 
 const rewriteRules = {
     'XChat': [
@@ -133,9 +129,8 @@ NotificationDaemon.prototype = {
     },
 
    // Create an icon for a notification from icon string/path.
-    _iconForNotificationData: function(icon, hints, size) {
+    _iconForNotificationData: function(appIcon, hints, size) {
         let textureCache = St.TextureCache.get_default();
-
         // If an icon is not specified, we use 'image-data' or 'image-path' hint for an icon
         // and don't show a large image. There are currently many applications that use
         // notify_notification_set_icon_from_pixbuf() from libnotify, which in turn sets
@@ -144,18 +139,15 @@ NotificationDaemon.prototype = {
         // So the logic here does the right thing for this case. If both an icon and either
         // one of 'image-data' or 'image-path' are specified, we show both an icon and
         // a large image.
-        if (icon) {
-            if (icon.substr(0, 7) == 'file://')
-                return textureCache.load_uri_async(icon, size, size);
-            else if (icon[0] == '/') {
-                let uri = GLib.filename_to_uri(icon, null);
-                return textureCache.load_uri_async(uri, size, size);
+        if (appIcon) {
+            if (appIcon.startsWith("file://")) {
+                return textureCache.load_uri_async(appIcon, size, size);
             } else {
-                let icon_type = St.IconType.FULLCOLOR;
-                if (icon.search("-symbolic") != -1)
-                    icon_type = St.IconType.SYMBOLIC;
-                return new St.Icon({ icon_name: icon,
-                                     icon_type: icon_type,
+                // Cinnamon prefers symbolic icons due to theming. If an icon
+                // name is specified, try to load it in symbolic. If that fails,
+                // St reverts to fullcolor anyway.
+                return new St.Icon({ icon_name: appIcon,
+                                     icon_type: St.IconType.SYMBOLIC,
                                      icon_size: size });
             }
         } else if (hints['image-data']) {
@@ -163,17 +155,12 @@ NotificationDaemon.prototype = {
                  bitsPerSample, nChannels, data] = hints['image-data'];
             return textureCache.load_from_raw(data, hasAlpha, width, height, rowStride, size);
         } else if (hints['image-path']) {
-            let path = hints['image-path'];
-            if (GLib.path_is_absolute (path)) {
-                return textureCache.load_uri_async(GLib.filename_to_uri(path, null), size, size);
+            let uri_or_icon_name = hints['image-path'];
+            if (uri_or_icon_name.startsWith("file://")) {
+                return textureCache.load_uri_async(uri_or_icon_name, size, size);
             } else {
-                let icon_type = St.IconType.FULLCOLOR;
-                if (path.search("-symbolic") != -1) {
-                    icon_type = St.IconType.SYMBOLIC;
-                }
-
-                return new St.Icon({ icon_name: path,
-                                     icon_type: icon_type,
+                return new St.Icon({ icon_name: uri_or_icon_name,
+                                     icon_type: St.IconType.FULLCOLOR,
                                      icon_size: size });
             }
         } else {
@@ -181,14 +168,14 @@ NotificationDaemon.prototype = {
             switch (hints.urgency) {
                 case Urgency.LOW:
                 case Urgency.NORMAL:
-                    stockIcon = 'dialog-information';
+                    stockIcon = 'xsi-dialog-information-symbolic';
                     break;
                 case Urgency.CRITICAL:
-                    stockIcon = 'dialog-error';
+                    stockIcon = 'xsi-dialog-error-symbolic';
                     break;
             }
             return new St.Icon({ icon_name: stockIcon,
-                                 icon_type: St.IconType.FULLCOLOR,
+                                 icon_type: St.IconType.SYMBOLIC,
                                  icon_size: size });
         }
     },
@@ -236,12 +223,12 @@ NotificationDaemon.prototype = {
         if (!isForTransientNotification) {
             let source = this._lookupSource(title, pid, trayIcon);
             if (source) {
-                source.setTitle(title);
                 return source;
             }
         }
 
-        let source = new Source(title, pid, sender, trayIcon);
+        const desktopEntryHint = ndata && ndata.hints['desktop-entry'];
+        let source = new Source(title, pid, sender, desktopEntryHint, trayIcon);
         source.setTransient(isForTransientNotification);
 
         if (!isForTransientNotification) {
@@ -287,7 +274,7 @@ NotificationDaemon.prototype = {
 
     // Sends a notification to the notification daemon. Returns the id allocated to the notification.
     NotifyAsync: function(params, invocation) {
-        let [appName, replacesId, icon, summary, body, actions, hints, timeout] = params;
+        let [appName, replacesId, appIcon, summary, body, actions, hints, timeout] = params;
         let id;
 
         for (let hint in hints) {
@@ -320,10 +307,19 @@ NotificationDaemon.prototype = {
                 // early versions of the spec; 'icon_data' should only be used if 'image-path' is not available
                 hints['image-data'] = hints['icon_data'];
 
+        // Spec requires app_icon and image-path to be a file uri or icon name
+        // https://specifications.freedesktop.org/notification-spec/latest/icons-and-images.html#icons-and-images-formats
+        if (appIcon && GLib.path_is_absolute(appIcon)) {
+            appIcon = GLib.filename_to_uri(appIcon, null);
+        }
+        if (hints['image-path'] && GLib.path_is_absolute(hints['image-path'])) {
+            hints['image-path'] = GLib.filename_to_uri(hints['image-path'], null);
+        }
+
         hints['suppress-sound'] = hints.maybeGet('suppress-sound') == true;
 
         let ndata = { appName: appName,
-                      icon: icon,
+                      appIcon: appIcon,
                       summary: summary,
                       body: body,
                       actions: actions,
@@ -369,8 +365,22 @@ NotificationDaemon.prototype = {
         let source = this._getSource(appName, pid, ndata, sender, null);
 
         if (source) {
-            this._notifyForSource(source, ndata);
-            return invocation.return_value(GLib.Variant.new('(u)', [id]));
+            try {
+                this._notifyForSource(source, ndata);
+                return invocation.return_value(GLib.Variant.new('(u)', [id]));
+            } catch (e) {
+                global.logError(e);
+                if (e instanceof GLib.Error) {
+                    return invocation.return_gerror(e);
+                } else {
+                    let name = e.name;
+                    if (!name.includes('.')) {
+                        name = `org.gnome.gjs.JSError.${name}`;
+                    }
+
+                    return invocation.return_dbus_error(name, e.message);
+                }
+            }
         }
 
         if (replacesId) {
@@ -392,7 +402,7 @@ NotificationDaemon.prototype = {
             }
 
             let [pid] = result;
-            source = this._getSource(appName, pid, ndata, sender);
+            source = this._getSource(appName, pid, ndata, sender, null);
 
             // We only store sender-pid entries for persistent sources.
             // Removing the entries once the source is destroyed
@@ -408,18 +418,23 @@ NotificationDaemon.prototype = {
                     delete this._senderToPid[sender];
                 }));
             }
-            this._notifyForSource(source, ndata);
+
+            try {
+                this._notifyForSource(source, ndata);
+            } catch (e) {
+                global.logError(e);
+            }
         }));
 
         return invocation.return_value(GLib.Variant.new('(u)', [id]));
     },
 
     _notifyForSource: function(source, ndata) {
-        let [id, icon, summary, body, actions, hints, notification, timeout, expires] =
-            [ndata.id, ndata.icon, ndata.summary, ndata.body,
+        let [id, appIcon, summary, body, actions, hints, notification, timeout, expires] =
+            [ndata.id, ndata.appIcon, ndata.summary, ndata.body,
              ndata.actions, ndata.hints, ndata.notification, ndata.timeout, ndata.expires];
 
-        let iconActor = this._iconForNotificationData(icon, hints, source.ICON_SIZE);
+        let iconActor = this._iconForNotificationData(appIcon, hints, source.ICON_SIZE);
 
         if (notification == null) {    // Create a new notification!
             notification = new MessageTray.Notification(source, summary, body,
@@ -465,8 +480,9 @@ NotificationDaemon.prototype = {
                                                  silent: hints['suppress-sound'] });
         }
 
-        // We only display a large image if an icon is also specified.
-        if (icon && (hints['image-data'] || hints['image-path'])) {
+        // We only display a large image if an icon is also specified in the hints AND it is
+        // **not** the same icon as appIcon.
+        if (appIcon && (hints['image-data'] || (hints['image-path'] && hints['image-path'] !== appIcon))) {
             let image = null;
             if (hints['image-data']) {
                 let [width, height, rowStride, hasAlpha,
@@ -474,9 +490,17 @@ NotificationDaemon.prototype = {
                 image = St.TextureCache.get_default().load_from_raw(data, hasAlpha,
                                                                     width, height, rowStride, notification.IMAGE_SIZE);
             } else if (hints['image-path']) {
-                image = St.TextureCache.get_default().load_uri_async(GLib.filename_to_uri(hints['image-path'], null),
-                                                                     notification.IMAGE_SIZE,
-                                                                     notification.IMAGE_SIZE);
+                let uri_or_icon_name = hints['image-path'];
+
+                if (uri_or_icon_name.startsWith("file://")) {
+                    image = St.TextureCache.get_default().load_uri_async(uri_or_icon_name,
+                                                                         notification.IMAGE_SIZE,
+                                                                         notification.IMAGE_SIZE);
+                } else {
+                    image = new St.Icon({ icon_name: uri_or_icon_name,
+                                          icon_type: St.IconType.FULLCOLOR,
+                                          icon_size: notification.IMAGE_SIZE });
+                }
             }
             notification.setImage(image);
         } else {
@@ -513,7 +537,7 @@ NotificationDaemon.prototype = {
         // of the 'transient' hint with hints['transient'] rather than hints.transient
         notification.setTransient(hints.maybeGet('transient') == true);
 
-        let sourceIconActor = source.useNotificationIcon ? this._iconForNotificationData(icon, hints, source.ICON_SIZE) : null;
+        let sourceIconActor = source.useNotificationIcon ? this._iconForNotificationData(appIcon, hints, source.ICON_SIZE) : null;
         source.processNotification(notification, sourceIconActor);
     },
 
@@ -559,8 +583,6 @@ NotificationDaemon.prototype = {
             return;
 
         let name = tracker.focus_app.get_name();
-        if (name && AUTOCLEAR_BLACKLIST.includes(name.toLowerCase()))
-            return;
 
         for (let i = 0; i < this._sources.length; i++) {
             let source = this._sources[i];
@@ -589,20 +611,31 @@ NotificationDaemon.prototype = {
         let source = this._lookupSource(null, icon.pid, true);
         if (source)
             source.destroy();
+    },
+
+    getNotificationCountForApp(app) {
+        const foundSource = this._sources.find(source => source.app === app);
+
+        if (foundSource) {
+            return foundSource.notifications.length;
+        } else {
+            return 0;
+        }
     }
 };
 
-function Source(title, pid, sender, trayIcon) {
-    this._init(title, pid, sender, trayIcon);
+function Source(title, pid, sender, desktopEntryHint, trayIcon) {
+    this._init(title, pid, sender, desktopEntryHint, trayIcon);
 }
 
 Source.prototype = {
     __proto__:  MessageTray.Source.prototype,
 
-    _init: function(title, pid, sender, trayIcon) {
+    _init: function(title, pid, sender, desktopEntryHint, trayIcon) {
         MessageTray.Source.prototype._init.call(this, title);
 
         this.initialTitle = title;
+        this.desktopEntryHint = desktopEntryHint;
 
         this.pid = pid;
         if (sender)
@@ -649,8 +682,25 @@ Source.prototype = {
         let app;
 
         app = Cinnamon.WindowTracker.get_default().get_app_from_pid(this.pid);
-        if (app != null)
-            return app;
+
+        // With flatpak apps, the notification's pid is that of the portal so use the desktop-entry hint instead.
+        if (!app && this.desktopEntryHint) {
+            const exceptions = {
+                    "vivaldi-stable": "com.vivaldi.Vivaldi",
+                    "brave-browser": "com.brave.Browser",
+                    "google-chrome": "com.google.Chrome",
+                    "microsoft-edge": "com.microsoft.Edge",
+                    "opera": "com.opera.Opera"
+                };
+            const exception = exceptions[this.desktopEntryHint];
+            app = Cinnamon.AppSystem.get_default().lookup_flatpak_app_id(exception ? exception : this.desktopEntryHint);
+            if (!app) {
+                app = this._findUniqueAppByName(this.initialTitle);
+            }
+            if (!app) log('Failed to find flatpak app for notification with desktop-entry hint:', this.desktopEntryHint);
+        }
+
+        if (app) return app;
 
         if (this.trayIcon) {
             app = Cinnamon.AppSystem.get_default().lookup_wmclass(this.trayIcon.wmclass);
@@ -659,6 +709,24 @@ Source.prototype = {
         }
 
         return null;
+    },
+
+    _findUniqueAppByName(appName) {
+        const appSystem = Cinnamon.AppSystem.get_default();
+        const runningApps = appSystem.get_running();
+        const matches = [];
+
+        for (const app of runningApps) {
+            if (app.get_name() === appName) {
+                matches.push(app);
+            }
+        }
+
+        if (matches.length === 1) {
+            return matches[0];
+        } else {
+            return null;
+        }
     },
 
     _setApp: function() {

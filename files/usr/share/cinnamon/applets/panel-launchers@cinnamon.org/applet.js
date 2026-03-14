@@ -11,7 +11,6 @@ const Main = imports.ui.main;
 const GLib = imports.gi.GLib;
 const Tooltips = imports.ui.tooltips;
 const DND = imports.ui.dnd;
-const Tweener = imports.ui.tweener;
 const Util = imports.misc.util;
 const Settings = imports.ui.settings;
 const Signals = imports.signals;
@@ -20,7 +19,8 @@ const SignalManager = imports.misc.signalManager;
 const PANEL_EDIT_MODE_KEY = 'panel-edit-mode';
 const PANEL_LAUNCHERS_KEY = 'panel-launchers';
 
-const CUSTOM_LAUNCHERS_PATH = GLib.get_home_dir() + '/.cinnamon/panel-launchers';
+const CUSTOM_LAUNCHERS_PATH = GLib.get_user_data_dir() + "/cinnamon/panel-launchers/";
+const OLD_CUSTOM_LAUNCHERS_PATH = GLib.get_home_dir() + '/.cinnamon/panel-launchers/';
 
 let pressLauncher = null;
 
@@ -35,48 +35,54 @@ class PanelAppLauncherMenu extends Applet.AppletPopupMenu {
         if (this._actions.length > 0) {
             for (let i = 0; i < this._actions.length; i++) {
                 let actionName = this._actions[i];
-                this.addAction(appinfo.get_action_name(actionName), Lang.bind(this, this._launchAction, actionName));
+                let icon = Util.getDesktopActionIcon(actionName);
+                if (icon == null)
+                    icon = 'xsi-empty-icon-symbolic';
+
+                let item = new PopupMenu.PopupIconMenuItem(appinfo.get_action_name(actionName), icon, St.IconType.SYMBOLIC);
+                this._signals.connect(item, 'activate', () => this._launcher.launchAction(actionName));
+                this.addMenuItem(item);
             }
 
             this.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
         }
 
-        let item = new PopupMenu.PopupIconMenuItem(_("Launch"), "media-playback-start", St.IconType.SYMBOLIC);
+        let item = new PopupMenu.PopupIconMenuItem(_("Launch"), "xsi-media-playback-start", St.IconType.SYMBOLIC);
         this._signals.connect(item, 'activate', Lang.bind(this, this._onLaunchActivate));
         this.addMenuItem(item);
 
         if (Main.gpu_offload_supported) {
-            let item = new PopupMenu.PopupIconMenuItem(_("Run with NVIDIA GPU"), "cpu", St.IconType.SYMBOLIC);
+            let item = new PopupMenu.PopupIconMenuItem(_("Run with dedicated GPU"), "xsi-cpu", St.IconType.SYMBOLIC);
             this._signals.connect(item, 'activate', Lang.bind(this, this._onLaunchOffloadedActivate));
             this.addMenuItem(item);
         }
 
-        item = new PopupMenu.PopupIconMenuItem(_("Add"), "list-add", St.IconType.SYMBOLIC);
+        item = new PopupMenu.PopupIconMenuItem(_("Add"), "xsi-list-add", St.IconType.SYMBOLIC);
         this._signals.connect(item, 'activate', Lang.bind(this, this._onAddActivate));
         this.addMenuItem(item);
 
-        item = new PopupMenu.PopupIconMenuItem(_("Edit"), "document-properties", St.IconType.SYMBOLIC);
+        item = new PopupMenu.PopupIconMenuItem(_("Edit"), "xsi-edit", St.IconType.SYMBOLIC);
         this._signals.connect(item, 'activate', Lang.bind(this, this._onEditActivate));
         this.addMenuItem(item);
 
-        item = new PopupMenu.PopupIconMenuItem(_("Remove"), "window-close", St.IconType.SYMBOLIC);
+        item = new PopupMenu.PopupIconMenuItem(_("Remove"), "xsi-list-remove", St.IconType.SYMBOLIC);
         this._signals.connect(item, 'activate', Lang.bind(this, this._onRemoveActivate));
         this.addMenuItem(item);
 
         this.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
-        let subMenu = new PopupMenu.PopupSubMenuMenuItem(_("Preferences"));
+        let subMenu = new PopupMenu.PopupSubMenuMenuItem(_("Applet preferences"));
         this.addMenuItem(subMenu);
 
-        item = new PopupMenu.PopupIconMenuItem(_("About..."), "dialog-question", St.IconType.SYMBOLIC);
+        item = new PopupMenu.PopupIconMenuItem(_("About..."), "xsi-dialog-question", St.IconType.SYMBOLIC);
         this._signals.connect(item, 'activate', Lang.bind(this._launcher.launchersBox, this._launcher.launchersBox.openAbout));
         subMenu.menu.addMenuItem(item);
 
-        item = new PopupMenu.PopupIconMenuItem(_("Configure..."), "system-run", St.IconType.SYMBOLIC);
-        this._signals.connect(item, 'activate', Lang.bind(this._launcher.launchersBox, this._launcher.launchersBox.configureApplet));
+        item = new PopupMenu.PopupIconMenuItem(_("Configure..."), "xsi-preferences", St.IconType.SYMBOLIC);
+        this._signals.connect(item, 'activate', () => this._launcher.launchersBox.configureApplet());
         subMenu.menu.addMenuItem(item);
 
-        this.remove_item = new PopupMenu.PopupIconMenuItem(_("Remove '%s'").format(_("Panel launchers")), "edit-delete", St.IconType.SYMBOLIC);
+        this.remove_item = new PopupMenu.PopupIconMenuItem(_("Remove '%s'").format(_("Panel launchers")), "xsi-edit-delete", St.IconType.SYMBOLIC);
         subMenu.menu.addMenuItem(this.remove_item);
     }
 
@@ -210,25 +216,24 @@ class PanelAppLauncher extends DND.LauncherDraggable {
     _animateIcon(step) {
         if (step >= 3) return;
         this.icon.set_pivot_point(0.5, 0.5);
-        Tweener.addTween(this.icon,
-                         { scale_x: 0.7,
-                           scale_y: 0.7,
-                           time: 0.2,
-                           transition: 'easeOutQuad',
-                           onComplete() {
-                               Tweener.addTween(this.icon,
-                                                { scale_x: 1.0,
-                                                  scale_y: 1.0,
-                                                  time: 0.2,
-                                                  transition: 'easeOutQuad',
-                                                  onComplete() {
-                                                      this._animateIcon(step + 1);
-                                                  },
-                                                  onCompleteScope: this
-                                                });
-                           },
-                           onCompleteScope: this
-                         });
+
+        this.icon.ease({
+            scale_x: 0.7,
+            scale_y: 0.7,
+            duration: 200,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            onComplete: () => {
+                this.icon.ease({
+                    scale_x: 1.0,
+                    scale_y: 1.0,
+                    duration: 200,
+                    mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                    onComplete: () => {
+                        this._animateIcon(step + 1);
+                    }
+                });
+            }
+        });
     }
 
     launch(offload=false) {
@@ -245,11 +250,13 @@ class PanelAppLauncher extends DND.LauncherDraggable {
                 this.app.open_new_window(-1);
             }
         }
+        this.icon.remove_all_transitions();
         this._animateIcon(0);
     }
 
     launchAction(name) {
         this.getAppInfo().launch_action(name, null);
+        this.icon.remove_all_transitions();
         this._animateIcon(0);
     }
 
@@ -281,12 +288,22 @@ class PanelAppLauncher extends DND.LauncherDraggable {
 
     _updateIconSize() {
         let node = this._iconBox.get_theme_node();
-        let maxHeight = this._iconBox.height - node.get_vertical_padding();
-        let maxWidth = this._iconBox.width - node.get_horizontal_padding();
-        let smallestDim = Math.min(maxHeight, maxWidth) / global.ui_scale;
+        let enforcedSize = 0;
 
-        if (smallestDim < this.icon.get_icon_size()) {
-            this.icon.set_icon_size(smallestDim);
+        if (this._iconBox.height > 0) {
+            enforcedSize = this._iconBox.height - node.get_vertical_padding();
+        }
+        else
+        if (this._iconBox.width > 0) {
+            enforcedSize = this._iconBox.width - node.get_horizontal_padding();
+        }
+        else
+        {
+            enforcedSize = -1;
+        }
+
+        if (enforcedSize < this.icon.get_icon_size()) {
+            this.icon.set_icon_size(enforcedSize);
         }
     }
 
@@ -457,7 +474,6 @@ class LaunchersBox {
             this.applet.addForeignLauncher(sourceId, dropIndex, source);
         }
 
-        actor.destroy();
         return true;
     }
 
@@ -579,7 +595,11 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         let app = appSys.lookup_app(path);
         let appinfo = null;
         if (!app) {
-            appinfo = CMenu.DesktopAppInfo.new_from_filename(CUSTOM_LAUNCHERS_PATH+"/"+path);
+            appinfo = CMenu.DesktopAppInfo.new_from_filename(CUSTOM_LAUNCHERS_PATH + path);
+            // Fallback to old launcher folder
+            if (!appinfo) {
+                appinfo = CMenu.DesktopAppInfo.new_from_filename(OLD_CUSTOM_LAUNCHERS_PATH + path);
+            }
             if (!appinfo) {
                 global.logWarning(`Failed to add launcher from path: ${path}`);
                 return null;
@@ -642,8 +662,10 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
         }
         if (delete_file) {
             let appid = launcher.getId();
-            let file = Gio.file_new_for_path(CUSTOM_LAUNCHERS_PATH+"/"+appid);
+            let file = Gio.file_new_for_path(CUSTOM_LAUNCHERS_PATH + appid);
             if (file.query_exists(null)) file.delete(null);
+            let old_file = Gio.file_new_for_path(OLD_CUSTOM_LAUNCHERS_PATH + appid);
+            if (old_file.query_exists(null)) old_file.delete(null);
         }
 
         this.sync_settings_proxy_to_settings();
@@ -666,9 +688,11 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
 
     showAddLauncherDialog(timestamp, launcher){
         if (launcher) {
-            Util.spawnCommandLine("cinnamon-desktop-editor -mcinnamon-launcher -f" + launcher.getId() + " " + this.settings.file.get_path());
+            Util.spawnCommandLine("cinnamon-desktop-editor -mcinnamon-launcher --icon-size %d -f %s %s"
+                .format(this.icon_size, launcher.getId(), this.settings.file.get_path()));
         } else {
-            Util.spawnCommandLine("cinnamon-desktop-editor -mcinnamon-launcher " + this.settings.file.get_path());
+            Util.spawnCommandLine("cinnamon-desktop-editor -mcinnamon-launcher --icon-size %d %s"
+                .format(this.icon_size, this.settings.file.get_path()))
         }
     }
 

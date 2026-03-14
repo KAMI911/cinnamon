@@ -14,17 +14,17 @@ import shutil
 import os
 import subprocess
 
-import PIL
+from PIL import Image
 import gi
 gi.require_version('AccountsService', '1.0')
-from gi.repository import AccountsService, GLib, GdkPixbuf
+from gi.repository import AccountsService, GLib, GdkPixbuf, XApp
 
-from SettingsWidgets import SidePage
-from ChooserButtonWidgets import PictureChooserButton
+from bin.SettingsWidgets import SidePage
+from bin.ChooserButtonWidgets import PictureChooserButton
 from xapp.GSettingsWidgets import *
 
 class PasswordError(Exception):
-    '''Exception raised when an incorrect password is supplied.'''
+    """Exception raised when an incorrect password is supplied."""
     pass
 
 
@@ -35,7 +35,7 @@ class Module:
 
     def __init__(self, content_box):
         keywords = _("user, account, information, details, password")
-        sidePage = SidePage(_("Account details"), "cs-user", keywords, content_box, module=self)
+        sidePage = SidePage(_("Account Details"), "cs-user", keywords, content_box, module=self)
         self.sidePage = sidePage
         self.window = None
 
@@ -49,11 +49,11 @@ class Module:
             page = SettingsPage()
             self.sidePage.add_widget(page)
 
-            settings = page.add_section(_("Account details"))
+            settings = page.add_section(_("Account Details"))
 
             self.scale = self.window.get_scale_factor()
 
-            self.face_button = PictureChooserButton(num_cols=4, button_picture_size=64, menu_pictures_size=64*self.scale, keep_square=True)
+            self.face_button = PictureChooserButton(num_cols=4, button_picture_width=64, menu_picture_width=64*self.scale, keep_square=True)
             self.face_button.set_alignment(0.0, 0.5)
             self.face_button.set_tooltip_text(_("Click to change your picture"))
 
@@ -130,7 +130,7 @@ class Module:
                         self.frame.show()
                         return
                 except GLib.Error as e:
-                    print("Unable to generate preview for file '%s' - %s\n" % (filename, e.message))
+                    print(f"Unable to generate preview for file '{filename}' - {e.message}\n")
 
         preview.clear()
         self.frame.hide()
@@ -146,7 +146,7 @@ class Module:
         path = "/tmp/temp-account-pic07.jpeg"
 
         # Crop the image to thumbnail size
-        image = PIL.Image.open(path)
+        image = Image.open(path)
         width, height = image.size
 
         if width > height:
@@ -165,7 +165,7 @@ class Module:
         bottom = (height + new_height) / 2
 
         image = image.crop((left, top, right, bottom))
-        image.thumbnail((255, 255), PIL.Image.ANTIALIAS)
+        image.thumbnail((255, 255), Image.LANCZOS)
 
         face_path = os.path.join(self.accountService.get_home_dir(), ".face")
 
@@ -199,14 +199,23 @@ class Module:
         dialog.connect("update-preview", self.update_preview_cb, preview)
 
         response = dialog.run()
+
         if response == Gtk.ResponseType.OK:
-            path = dialog.get_filename()
-            image = PIL.Image.open(path)
-            image.thumbnail((255, 255), PIL.Image.ANTIALIAS)
+            string = dialog.get_filename()
+            print(string)
+            if string.startswith("/"):
+                path = string
+            else:
+                theme = Gtk.IconTheme.get_default()
+                icon_info = theme.lookup_icon_for_scale(string, 256, dialog.get_scale_factor(), Gtk.IconLookupFlags.FORCE_SIZE)
+                path = icon_info.get_filename() if icon_info else None
+
             face_path = os.path.join(self.accountService.get_home_dir(), ".face")
-            image.save(face_path, "png")
-            self.accountService.set_icon_file(face_path)
-            self.face_button.set_picture_from_file(face_path)
+
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_size(path, 255, -1)
+            pixbuf.savev(face_path, "png")
+            self.accountService.set_icon_file(path)
+            self.face_button.set_picture_from_file(path)
 
         dialog.destroy()
 
@@ -323,12 +332,19 @@ class PasswordDialog(Gtk.Dialog):
         oldpass = self.current_password.get_text()
         newpass = self.new_password.get_text()
         passwd = pexpect.spawn("/usr/bin/passwd")
-        time.sleep(0.5)
-        passwd.sendline(oldpass)
-        time.sleep(0.5)
-        passwd.sendline(newpass)
-        time.sleep(0.5)
-        passwd.sendline(newpass)
+        # passwd only asks for the old password when there already is one set.
+        if oldpass == "":
+            time.sleep(0.5)
+            passwd.sendline(newpass)
+            time.sleep(0.5)
+            passwd.sendline(newpass)
+        else:
+            time.sleep(0.5)
+            passwd.sendline(oldpass)
+            time.sleep(0.5)
+            passwd.sendline(newpass)
+            time.sleep(0.5)
+            passwd.sendline(newpass)
         time.sleep(0.5)
         passwd.close()
 
@@ -358,13 +374,23 @@ class PasswordDialog(Gtk.Dialog):
     def _on_show_password_toggled(self, widget):
         self.set_passwords_visibility()
 
+    def _get_pam_service(self):
+        import os
+        if os.path.exists('/etc/pam.d/system-auth'):
+            return 'system-auth'
+        elif os.path.exists('/etc/pam.d/common-auth'):
+            return 'common-auth'
+        else:
+            return 'login'
+
     def auth_pam(self):
-        if not pam.pam().authenticate(GLib.get_user_name(), self.current_password.get_text(), 'passwd'):
+        service = self._get_pam_service()
+        if not pam.pam().authenticate(GLib.get_user_name(), self.current_password.get_text(), service):
             raise PasswordError("Invalid password")
 
     def auth_PyPAM(self):
         auth = PAM.pam()
-        auth.start('passwd')
+        auth.start(self._get_pam_service())
         auth.set_item(PAM.PAM_USER, GLib.get_user_name())
         auth.set_item(PAM.PAM_CONV, self.pam_conv)
         try:
@@ -376,25 +402,24 @@ class PasswordDialog(Gtk.Dialog):
 
     def _on_current_password_changed(self, widget, event):
         self.infobar.hide()
-        if self.current_password.get_text() != "":
-            try:
-                self.auth_pam() if pam else self.auth_PyPAM()
-            except PasswordError:
-                self.current_password.set_icon_from_stock(Gtk.EntryIconPosition.SECONDARY, Gtk.STOCK_DIALOG_WARNING)
-                self.current_password.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, _("Wrong password"))
-                self.current_password.set_tooltip_text(_("Wrong password"))
-                self.correct_current_password = False
-            except:
-                self.current_password.set_icon_from_stock(Gtk.EntryIconPosition.SECONDARY, Gtk.STOCK_DIALOG_WARNING)
-                self.current_password.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, _("Internal Error"))
-                self.current_password.set_tooltip_text(_("Internal Error"))
-                self.correct_current_password = False
-                raise
-            else:
-                self.current_password.set_icon_from_stock(Gtk.EntryIconPosition.SECONDARY, None)
-                self.current_password.set_tooltip_text("")
-                self.correct_current_password = True
-                self.check_passwords()
+        try:
+            self.auth_pam() if pam else self.auth_PyPAM()
+        except PasswordError:
+            self.current_password.set_icon_from_stock(Gtk.EntryIconPosition.SECONDARY, Gtk.STOCK_DIALOG_WARNING)
+            self.current_password.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, _("Wrong password"))
+            self.current_password.set_tooltip_text(_("Wrong password"))
+            self.correct_current_password = False
+        except:
+            self.current_password.set_icon_from_stock(Gtk.EntryIconPosition.SECONDARY, Gtk.STOCK_DIALOG_WARNING)
+            self.current_password.set_icon_tooltip_text(Gtk.EntryIconPosition.SECONDARY, _("Internal Error"))
+            self.current_password.set_tooltip_text(_("Internal Error"))
+            self.correct_current_password = False
+            raise
+        else:
+            self.current_password.set_icon_from_stock(Gtk.EntryIconPosition.SECONDARY, None)
+            self.current_password.set_tooltip_text("")
+            self.correct_current_password = True
+            self.check_passwords()
 
     # Based on setPasswordStrength() in Mozilla Seamonkey, which is tri-licensed under MPL 1.1, GPL 2.0, and LGPL 2.1.
     # Forked from Ubiquity validation.py

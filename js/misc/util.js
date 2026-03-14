@@ -11,15 +11,32 @@
 
 const GLib = imports.gi.GLib;
 const Gio = imports.gi.Gio;
+const Gtk = imports.gi.Gtk;
 const GObject = imports.gi.GObject;
 const Gir = imports.gi.GIRepository;
+const Clutter = imports.gi.Clutter;
 const Mainloop = imports.mainloop;
 const Main = imports.ui.main;
+const Params = imports.misc.params;
+
+const WIGGLE_OFFSET = 6;
+const WIGGLE_DURATION = 65;
+const N_WIGGLES = 3;
 
 // http://daringfireball.net/2010/07/improved_regex_for_matching_urls
 const _balancedParens = '\\([^\\s()<>]+\\)';
 const _leadingJunk = '[\\s`(\\[{\'\\"<\u00AB\u201C\u2018]';
 const _notTrailingJunk = '[^\\s`!()\\[\\]{};:\'\\".,<>?\u00AB\u00BB\u201C\u201D\u2018\u2019]';
+
+function decodeHTML(str=null) {
+    if (str === null) {
+        return null;
+    }
+
+    return str.replace(/&#(\d+);/g, function(match, dec) {
+        return String.fromCharCode(dec);
+    });
+}
 
 const _urlRegexp = new RegExp(
     '(^|' + _leadingJunk + ')' +
@@ -198,6 +215,52 @@ function spawnCommandLineAsync(command_line, callback, errback) {
     });
 }
 
+function _runSubprocessAsyncIO(subprocess, callback, input, stripBash) {
+    subprocess.init(null);
+    let cancellable = new Gio.Cancellable();
+
+    subprocess.communicate_utf8_async(input, cancellable, (obj, res) => {
+        let success, stdout, stderr, exitCode;
+        // This will throw on cancel with "Gio.IOErrorEnum: Operation was cancelled"
+        tryFn(() => [success, stdout, stderr] = obj.communicate_utf8_finish(res));
+        if (typeof callback === 'function' && !cancellable.is_cancelled()) {
+            if (stripBash && stderr && stderr.indexOf('bash: ') > -1) {
+                stderr = stderr.replace(/bash: /, '');
+            }
+            exitCode = success ? subprocess.get_exit_status() : -1;
+            callback(stdout, stderr, exitCode);
+        }
+        subprocess.cancellable = null;
+    });
+    subprocess.cancellable = cancellable;
+
+    return subprocess;
+}
+
+/**
+ * spawnAsyncIO:
+ * @argv: an argument array
+ * @callback (function): called on success or failure
+ * @opts (object): options: flags, input
+ *
+ * Runs @argv in the background. Callback has three arguments -
+ * stdout, stderr, and exitCode.
+ *
+ * Returns (object): a Gio.Subprocess instance
+ */
+function spawnAsyncIO(argv, callback, opts = {}) {
+    let {flags, input} = opts;
+    if (!input) input = null;
+
+    let subprocess = new Gio.Subprocess({
+        argv: argv,
+        flags: flags ? flags
+            : Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDIN_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+    });
+
+    return _runSubprocessAsyncIO(subprocess, callback, input, false);
+}
+
 /**
  * spawnCommandLineAsyncIO:
  * @command: a command
@@ -206,6 +269,9 @@ function spawnCommandLineAsync(command_line, callback, errback) {
  *
  * Runs @command in the background. Callback has three arguments -
  * stdout, stderr, and exitCode.
+ *
+ * If you have an argument array instead of a command string, use
+ * spawnAsyncIO() instead.
  *
  * Returns (object): a Gio.Subprocess instance
  */
@@ -218,25 +284,8 @@ function spawnCommandLineAsyncIO(command, callback, opts = {}) {
         flags: flags ? flags
             : Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDIN_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
     });
-    subprocess.init(null);
-    let cancellable = new Gio.Cancellable();
 
-    subprocess.communicate_utf8_async(input, cancellable, (obj, res) => {
-        let success, stdout, stderr, exitCode;
-        // This will throw on cancel with "Gio.IOErrorEnum: Operation was cancelled"
-        tryFn(() => [success, stdout, stderr] = obj.communicate_utf8_finish(res));
-        if (typeof callback === 'function' && !cancellable.is_cancelled()) {
-            if (stderr && stderr.indexOf('bash: ') > -1) {
-                stderr = stderr.replace(/bash: /, '');
-            }
-            exitCode = success ? subprocess.get_exit_status() : -1;
-            callback(stdout, stderr, exitCode);
-        }
-        subprocess.cancellable = null;
-    });
-    subprocess.cancellable = cancellable;
-
-    return subprocess;
+    return _runSubprocessAsyncIO(subprocess, callback, input, !argv);
 }
 
 function _handleSpawnError(command, err) {
@@ -338,7 +387,7 @@ function fixupPCIDescription(desc) {
         }
     }
 
-    /* Attmept to shorten ID by ignoring certain individual words */
+    /* Attempt to shorten ID by ignoring certain individual words */
     let words = desc.split(' ');
     let out = [ ];
     for (let i = 0; i < words.length; i++) {
@@ -354,72 +403,6 @@ function fixupPCIDescription(desc) {
     }
 
     return out.join(' ');
-}
-
-// key: normal char, value: regex containing all chars with accents
-const _LATINISE_REGEX = {
-    //uppercase
-    A: /[\xC0-\xC5\u0100\u0102\u0104]/g,
-    AE: /\xC6/g,
-    C: /[\xC7\u0106\u0108\u010A\u010C]/g,
-    D: /[\xD0\u010E\u0110]/g,
-    E: /[\xC8-\xCB\u0112\u0114\u0116\u0118\u011A]/g,
-    G: /[\u011C\u011E\u0120\u0122]/g,
-    H: /[\u0124\u0126]/g,
-    I: /[\xCC-\xCF\u0128\u012A\u012C\u0130]/g,
-    IJ: /\u0132/g,
-    J: /[\u012E\u0134]/g,
-    K: /\u0136/g,
-    L: /[\u0139\u013B\u013D\u013F\u0141]/g,
-    N: /[\xD1\u0143\u0145\u0147\u014A]/g,
-    O: /[\xD2-\xD6\xD8\u014C\u014E\u0150]/g,
-    OE: /\u0152/g,
-    R: /[\u0154\u0156\u0158]/g,
-    S: /[\u015A\u015C\u015E\u0160]/g,
-    T: /[\u0162\u0164\u0166]/g,
-    U: /[\xD9-\xDC\u0168\u016A\u016C\u016E\u0170\u0172]/g,
-    W: /\u0174/g,
-    Y: /[\xDD\u0176\u0178]/g,
-    Z: /[\u0179\u017B\u017D]/g,
-
-    //lowercase
-    a: /[\xE0-\xE5\u0101\u0103\u0105]/g,
-    ae: /\xE6/g,
-    c: /[\xE7\u0107\u0109\u010B\u010D]/g,
-    d: /[\u010F\u0111]/g,
-    e: /[\xE8-\xEB\u0113\u0115\u0117\u0119\u011B]/g,
-    g: /[\u011D\u011F\u0121\u0123]/g,
-    h: /[\u0125\u0127]/g,
-    i: /[\xEC-\xEF\u0129\u012B\u012D\u0131]/g,
-    ij: /\u0133/g,
-    j: /[\u012F\u0135]/g,
-    k: /[\u0137\u0138]/g,
-    l: /[\u013A\u013C\u013E\u0140\u0142]/g,
-    n: /[\xF1\u0144\u0146\u0148\u0149\u014B]/g,
-    o: /[\xF2-\xF6\xF8\u014D\u014F\u0151]/g,
-    oe: /\u0153/g,
-    r: /[\u0155\u0157\u0159]/g,
-    s: /[\u015B\u015D\u015F\u0161]/g,
-    t: /[\u0163\u0165\u0167]/g,
-    u: /[\xF9-\xFC\u0169\u016B\u016D\u016F\u0171\u0173]/g,
-    w: /\u0175/g,
-    y: /[\xFD\xFF\u0177]/g,
-    z: /[\u017A\u017C\u017E]/g
-};
-
-
-/**
- * latinise:
- * @string (string): a string
- *
- * Returns (string): @string, replaced accented chars
- */
-function latinise(string){
-    //call every regex to replace chars
-    for(var i in _LATINISE_REGEX){
-        string = string.replace(_LATINISE_REGEX[i], i);
-    }
-    return string;
 }
 
 /**
@@ -447,102 +430,6 @@ function queryCollection(collection, query, indexOnly = false) {
     }
     return indexOnly ? -1 : null;
 }
-
-/**
- * findIndex:
- * @array (array): Array to be iterated.
- * @callback (function): The function to call on every iteration,
- * should return a boolean value.
- *
- * Returns (number): the index of @array, else -1.
- */
-function findIndex(array, callback) {
-    for (let i = 0, len = array.length; i < len; i++) {
-        if (array[i] && callback(array[i], i, array)) {
-            return i;
-        }
-    }
-    return -1;
-}
-
-/**
- * find:
- * @array (array): Array to be iterated.
- * @callback (function): The function to call on every iteration,
- * should return a boolean value.
- *
- * Returns (any): Returns the matched element, else null.
- */
-function find(arr, callback) {
-    for (let i = 0, len = arr.length; i < len; i++) {
-        if (callback(arr[i], i, arr)) {
-            return arr[i];
-        }
-    }
-    return null;
-};
-
-/**
- * each:
- * @array (array|object): Array or object to be iterated.
- * @callback (function): The function to call on every iteration.
- *
- * Iteratee functions may exit iteration early by explicitly returning false.
- */
-function each(obj, callback) {
-    if (Array.isArray(obj)) {
-        for (let i = 0, len = obj.length; i < len; i++) {
-            if (callback(obj[i], i) === false) {
-                return;
-            }
-        }
-    } else {
-        let keys = Object.keys(obj);
-        for (let i = 0, len = keys.length; i < len; i++) {
-            let key = keys[i];
-            callback(obj[key], key);
-        }
-    }
-};
-
-/**
- * filter:
- * @array (array): Array to be iterated.
- * @callback (function): The function to call on every iteration.
- *
- * Returns (array): Returns the new filtered array.
- */
-function filter(arr, callback) {
-    let result = [];
-    for (let i = 0, len = arr.length; i < len; i++) {
-        if (callback(arr[i], i, arr)) {
-            result.push(arr[i]);
-        }
-    }
-    return result;
-};
-
-/**
- * map:
- * @array (array): Array to be iterated.
- * @callback (function): The function to call on every iteration.
- *
- * Returns (array): Returns the new mapped array.
- */
-function map(arr, callback) {
-    if (arr == null) {
-        return [];
-    }
-
-    let len = arr.length;
-    let out = Array(len);
-
-    for (let i = 0; i < len; i++) {
-        out[i] = callback(arr[i], i, arr);
-    }
-
-    return out;
-};
 
 /**
  * tryFn:
@@ -706,7 +593,7 @@ const FastObject = function(o) {
 }
 FastObject();
 function toFastProperties(obj) {
-    each(obj, function(value) {
+    Object.values(obj).forEach( value => {
         if (value && !Array.isArray(value)) FastObject(value);
     });
 };
@@ -786,4 +673,223 @@ function version_exceeds(version, min_version) {
     } else {
         return true;
     }
+}
+
+// Maps .desktop action name to an icon
+const DESKTOP_ACTION_ICON_NAMES = {
+    area_shot: 'screenshot-area',
+    base: 'x-office-database',
+    big_picture: 'xsi-view-fullscreen-symbolic',
+    calc: 'xsi-x-office-spreadsheet-symbolic',
+    community: 'xsi-users-symbolic',
+    compose: 'xsi-text-editor-symbolic',
+    contacts: 'xsi-x-office-address-book-symbolic',
+    document: 'xsi-document-new-symbolic',
+    draw: 'xsi-x-office-drawing-symbolic',
+    friends: 'xsi-user-available-symbolic',
+    fullscreen: 'xsi-view-fullscreen-symbolic',
+    impress: 'xsi-x-office-presentation-symbolic',
+    library: 'xsi-dictionary-symbolic',
+    math: 'x-office-math',
+    mute: 'xsi-audio-volume-muted-symbolic',
+    new_document: 'xsi-document-new-symbolic',
+    new_private_window: 'view-private',
+    new_root_window: 'xsi-dialog-password-symbolic',
+    news: 'news',
+    new_session: 'xsi-tab-new-symbolic',
+    new_window: 'xsi-window-new-symbolic',
+    next: 'xsi-media-skip-forward-symbolic',
+    open_computer: 'xsi-computer-symbolic',
+    open_home: 'xsi-user-home-symbolic',
+    open_trash: 'xsi-user-trash-symbolic',
+    play: 'xsi-media-playback-start-symbolic',
+    play_pause: 'xsi-media-playback-start-symbolic',
+    preferences: 'xsi-preferences-symbolic',
+    prefs: 'xsi-preferences-symbolic',
+    previous: 'xsi-media-skip-backward-symbolic',
+    screen_shot: 'screenshot-fullscreen',
+    screenshots: 'xsi-screenshooter-symbolic',
+    servers: 'xsi-network-server-symbolic',
+    settings: 'xsi-preferences-symbolic',
+    ssa: 'screenshot-area',
+    ssf: 'screenshot-fullscreen',
+    ssw: 'screenshot-window',
+    stop_quit: 'xsi-media-playback-stop-symbolic',
+    store: 'store',
+    window: 'xsi-window-new-symbolic',
+    window_shot: 'screenshot-window',
+    writer: 'xsi-x-office-document-symbolic',
+};
+
+/**
+ * getDesktopActionIcon:
+ * @action (string): Action name
+ *
+ * Returns (string|null): Name of the icon associated with this action or null if not found
+ */
+function getDesktopActionIcon(action) {
+    let actionID = '';
+    if (action.toUpperCase() === action) {
+        actionID = action.toLowerCase();
+    } else {
+        // first letter lowercase, replace uppercase with _+lowercase
+        actionID = action.charAt(0).toLowerCase() + action.slice(1);
+        actionID = actionID.replace(/([A-Z])/g, '_$1').toLowerCase();
+    }
+    actionID = actionID.replace(/-/g, '_');
+    
+    if (DESKTOP_ACTION_ICON_NAMES.hasOwnProperty(actionID))
+        return DESKTOP_ACTION_ICON_NAMES[actionID];
+    else return null;
+}
+
+/**
+ * splitByGlyph:
+ * @str (string): The string to be converted
+ *
+ * Converts a string, possibly containing multiple codepoint unicode characters (e.g. emoji), into
+ * an array of unicode graphemes clusters (glyphs). For example: "👩‍👩‍👧‍👧😃".length === 13, but splitByGlyph("👩‍👩‍👧‍👧😃")
+ * returns ["👩‍👩‍👧‍👧", "😃"] which is length 2.
+ * 
+ * Returns (array): Array of unicode grapheme clusters (glyphs).
+ */
+function splitByGlyph(str) {
+    const glyphs = [];
+    const buffer = new Gtk.TextBuffer();
+    buffer.set_text(str, -1);
+    const iter = buffer.get_start_iter();
+    const iter2 = buffer.get_start_iter();
+    
+    while (!iter2.is_end()) {
+        iter2.forward_cursor_position();
+        glyphs.push(buffer.get_text(iter, iter2, false));
+        iter.forward_cursor_position();
+    }
+    return glyphs;
+}
+
+function wiggle(actor, params) {
+    params = Params.parse(params, {
+        offset: WIGGLE_OFFSET,
+        duration: WIGGLE_DURATION,
+        wiggleCount: N_WIGGLES,
+    });
+    actor.translation_x = 0;
+
+    // Accelerate before wiggling
+    actor.ease({
+        translation_x: -params.offset,
+        duration: params.duration,
+        mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+        onComplete: () => {
+            // Wiggle
+            actor.ease({
+                translation_x: params.offset,
+                duration: params.duration,
+                mode: Clutter.AnimationMode.LINEAR,
+                repeatCount: params.wiggleCount,
+                autoReverse: true,
+                onComplete: () => {
+                    // Decelerate and return to the original position
+                    actor.ease({
+                        translation_x: 0,
+                        duration: params.duration,
+                        mode: Clutter.AnimationMode.EASE_IN_QUAD,
+                    });
+                }
+            });
+        }
+    });
+}
+
+/**
+ * switchToGreeter:
+ *
+ * Switches to the display manager's login greeter, allowing another user
+ * to log in without logging out the current user. Tries multiple display
+ * manager methods in order of preference.
+ */
+function switchToGreeter() {
+    GLib.idle_add(GLib.PRIORITY_DEFAULT, _doSwitchToGreeter);
+}
+
+function _doSwitchToGreeter() {
+    // Check if user switching is locked down
+    if (Main.lockdownSettings.get_boolean('disable-user-switching')) {
+        global.logWarning("User switching is locked down");
+        return GLib.SOURCE_REMOVE;
+    }
+
+    if (_processIsRunning('gdm')) {
+        // Old GDM
+        try {
+            spawn(['gdmflexiserver', '--startnew', 'Standard']);
+            return GLib.SOURCE_REMOVE;
+        } catch (e) {
+            global.logError('Error calling gdmflexiserver: ' + e.message);
+        }
+    }
+
+    if (_processIsRunning('gdm3')) {
+        // Newer GDM
+        try {
+            spawn(['gdmflexiserver']);
+            return GLib.SOURCE_REMOVE;
+        } catch (e) {
+            global.logError('Error calling gdmflexiserver: ' + e.message);
+        }
+    }
+
+    // Try freedesktop.org standard DBus method (works with most modern display managers)
+    let seat_path = GLib.getenv('XDG_SEAT_PATH');
+    if (seat_path) {
+        try {
+            let bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, null);
+            bus.call_sync(
+                'org.freedesktop.DisplayManager',
+                seat_path,
+                'org.freedesktop.DisplayManager.Seat',
+                'SwitchToGreeter',
+                null,
+                null,
+                Gio.DBusCallFlags.NONE,
+                -1,
+                null
+            );
+            return GLib.SOURCE_REMOVE;
+        } catch (e) {
+            global.logError('Error calling SwitchToGreeter: ' + e.message);
+        }
+    }
+
+    global.logWarning('switchToGreeter: No supported display manager method available');
+    return GLib.SOURCE_REMOVE;
+}
+
+function _processIsRunning(name) {
+    try {
+        let [success, stdout] = GLib.spawn_command_line_sync('pidof ' + name);
+        return success && stdout.length > 0;
+    } catch (e) {
+        return false;
+    }
+}
+
+/**
+ * getTtyVals:
+ *
+ * Determines the VT number of the current graphical session and a free
+ * text console VT. Used by the backup locker to tell the user which
+ * Ctrl+Alt+F key to use for recovery.
+ *
+ * Returns: (array): [termTty, sessionTty] as integers
+ */
+function getTtyVals() {
+    let sessionTty = parseInt(GLib.getenv('XDG_VTNR'));
+    if (isNaN(sessionTty))
+        sessionTty = 7;
+
+    let termTty = sessionTty !== 2 ? 2 : 1;
+
+    return [termTty, sessionTty];
 }

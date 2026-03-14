@@ -2,23 +2,23 @@ const Clutter = imports.gi.Clutter;
 const Meta = imports.gi.Meta;
 const St = imports.gi.St;
 const Gio = imports.gi.Gio;
-const AppletManager = imports.ui.appletManager;
 const Main = imports.ui.main;
-const Tweener = imports.ui.tweener;
 const PopupMenu = imports.ui.popupMenu;
 const Applet = imports.ui.applet;
 const SignalManager = imports.misc.signalManager;
+const WindowUtils = imports.misc.windowUtils;
+const Mainloop = imports.mainloop;
 
-const {each, findIndex, tryFn, unref, trySpawnCommandLine, spawn_async} = imports.misc.util;
+const {tryFn, unref, trySpawnCommandLine, spawn_async, getDesktopActionIcon} = imports.misc.util;
+const Me = imports.ui.extension.getCurrentExtension();
 const {
     CLOSE_BTN_SIZE,
     CLOSED_BUTTON_STYLE,
     OPACITY_OPAQUE,
     RESERVE_KEYS,
-    ICON_NAMES,
     FavType,
     autoStartStrDir
-} = require('./constants');
+} = Me.imports.constants;
 
 const convertRange = function(value, r1, r2) {
     return ((value - r1[0]) * (r2[1] - r2[0])) / (r1[1] - r1[0]) + r2[0];
@@ -27,20 +27,20 @@ const convertRange = function(value, r1, r2) {
 const setOpacity = (peekTime, window_actor, targetOpacity, cb) => {
     const opacity = convertRange(targetOpacity, [0, 100], [0, 255]);
 
-    const tweenConfig = {
-        time: peekTime * 0.001,
-        transition: 'easeOutQuad',
-        opacity: opacity > 255 ? 255 : opacity
+    const easeConfig = {
+        duration: peekTime,
+        mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+        opacity: opacity > 255 ? 255 : opacity,
     };
 
     if (typeof cb === 'function') {
-        tweenConfig.onComplete = cb;
+        easeConfig.onStopped = cb;
     }
 
-    Tweener.addTween(window_actor, tweenConfig);
+    window_actor.ease(easeConfig);
 };
 
-class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
+var AppMenuButtonRightClickMenu = class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
     constructor(params, orientation) {
         super(params, orientation);
         this.state = params.state;
@@ -52,9 +52,9 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
 
     monitorMoveWindows(i) {
         if (this.state.settings.monitorMoveAllWindows) {
-            let metaWindows = this.groupState.metaWindows.slice();
+            const metaWindows = this.groupState.metaWindows.slice();
             while (metaWindows.length > 0) {
-                let metaWindow = metaWindows[0];
+                const metaWindow = metaWindows[0];
                 if (metaWindow === this.groupState.lastFocused) {
                     Main.activateWindow(metaWindow, global.get_current_time());
                 }
@@ -73,10 +73,10 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
 
         let item;
         let length;
-        let hasWindows = this.groupState.metaWindows.length > 0;
-        let isWindowBacked = this.groupState.app.is_window_backed();
+        const hasWindows = this.groupState.metaWindows.length > 0;
+        const isWindowBacked = this.groupState.app.is_window_backed();
 
-        let createMenuItem = (opts = {label: '', icon: null}) => {
+        const createMenuItem = (opts = {label: '', icon: null}) => {
             if (opts.icon) {
                 return new PopupMenu.PopupIconMenuItem(opts.label, opts.icon, St.IconType.SYMBOLIC);
             }
@@ -90,7 +90,7 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
         if (hasWindows) {
             // Monitors
             if (Main.layoutManager.monitors.length > 1) {
-                let connectMonitorEvent = (item, i) => {
+                const connectMonitorEvent = (item, i) => {
                     this.signals.connect(item, 'activate', () => this.monitorMoveWindows(i));
                 };
                 for (let i = 0, len = Main.layoutManager.monitors.length; i < len; i++) {
@@ -107,7 +107,7 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
                 }
             }
             // Workspace
-            if ((length = global.screen.n_workspaces) > 1) {
+            if ((length = global.workspace_manager.n_workspaces) > 1) {
                 if (this.groupState.lastFocused && this.groupState.lastFocused.is_on_all_workspaces()) {
                     item = createMenuItem({label: _('Only on this workspace')});
                     this.signals.connect(item, 'activate', () => {
@@ -129,17 +129,17 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
                     item = new PopupMenu.PopupSubMenuMenuItem(_('Move to another workspace'));
                     this.addMenuItem(item);
 
-                    let connectWorkspaceEvent = (ws, j) => {
+                    const connectWorkspaceEvent = (ws, j) => {
                         this.signals.connect(ws, 'activate', () => {
-                            this.groupState.lastFocused.change_workspace(global.screen.get_workspace_by_index(j));
+                            this.groupState.lastFocused.change_workspace(global.workspace_manager.get_workspace_by_index(j));
                         });
                     };
                     for (let i = 0; i < length; i++) {
                         // Make the index a local variable to pass to function
-                        let j = i;
-                        let name = Main.workspace_names[i] ? Main.workspace_names[i] : Main._makeDefaultWorkspaceName(i);
-                        let menuItem = createMenuItem({label: _(name)});
-                        let ws = this.groupState.lastFocused.get_workspace();
+                        const j = i;
+                        const name = Main.workspace_names[i] ? Main.workspace_names[i] : Main._makeDefaultWorkspaceName(i);
+                        const menuItem = createMenuItem({label: _(name)});
+                        const ws = this.groupState.lastFocused.get_workspace();
 
                         if (ws && i === ws.index()) {
                             menuItem.setSensitive(false);
@@ -154,51 +154,31 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
         }
 
         // Preferences
-        let subMenu = new PopupMenu.PopupSubMenuMenuItem(_('Preferences'));
+        const subMenu = new PopupMenu.PopupSubMenuMenuItem(_('Applet preferences'));
         this.addMenuItem(subMenu);
 
-        item = createMenuItem({label: _('About...'), icon: 'dialog-question'});
+        item = createMenuItem({label: _('About...'), icon: 'xsi-dialog-question'});
         this.signals.connect(item, 'activate', () => this.state.trigger('openAbout'));
         subMenu.menu.addMenuItem(item);
 
-        item = createMenuItem({label: _('Configure...'), icon: 'system-run'});
+        item = createMenuItem({label: _('Configure...'), icon: 'xsi-preferences'});
         this.signals.connect(item, 'activate', () => this.state.trigger('configureApplet'));
         subMenu.menu.addMenuItem(item);
 
-        item = createMenuItem({label: _("Remove '%s'").format(_("Grouped window list")), icon: 'edit-delete'});
+        item = createMenuItem({label: _("Remove '%s'").format(_("Grouped window list")), icon: 'xsi-edit-delete'});
         this.signals.connect(item, 'activate', (actor, event) => this.state.trigger('removeApplet', event));
 
         subMenu.menu.addMenuItem(item);
         this.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
         if (this.state.settings.showRecent) {
-            // Places
-            if (this.groupState.appId === 'nemo.desktop' || this.groupState.appId === 'nemo-home.desktop') {
-                let subMenu = new PopupMenu.PopupSubMenuMenuItem(_('Places'));
-                this.addMenuItem(subMenu);
-
-                let defualtPlaces = this.listDefaultPlaces();
-                let bookmarks = this.listBookmarks();
-                let devices = this.listDevices();
-                let places = [...defualtPlaces, ...bookmarks, ...devices];
-                let handlePlaceLaunch = (item, i) => {
-                    this.signals.connect(item, 'activate', () => places[i].launch());
-                };
-                for (let i = 0, len = places.length; i < len; i++) {
-                    item = createMenuItem({label: _(places[i].name), icon: 'folder'});
-                    handlePlaceLaunch(item, i);
-                    subMenu.menu.addMenuItem(item);
-                }
-                this.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-            }
-
             // Recent Files
-            let recentItems = this.state.trigger('getRecentItems');
-            let items = [];
+            const recentItems = this.state.trigger('getRecentItems');
+            const items = [];
 
             for (let i = 0, len = recentItems.length; i < len; i++) {
-                let mimeType = recentItems[i].get_mime_type();
-                let appInfo = Gio.app_info_get_default_for_type(mimeType, false);
+                const mimeType = recentItems[i].get_mime_type();
+                const appInfo = Gio.app_info_get_default_for_type(mimeType, false);
                 if (appInfo && this.groupState.appInfo && appInfo.get_id() === this.groupState.appId) {
                     items.push(recentItems[i]);
                 }
@@ -206,19 +186,19 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
             let itemsLength = items.length;
 
             if (itemsLength > 0) {
-                let subMenu = new PopupMenu.PopupSubMenuMenuItem(_('Recent'));
+                const subMenu = new PopupMenu.PopupSubMenuMenuItem(_('Recent'));
                 this.addMenuItem(subMenu);
-                let num = 10;
+                const num = 10;
                 if (itemsLength > num) {
                     itemsLength = num;
                 }
-                let handleRecentLaunch = (item, i) => {
+                const handleRecentLaunch = (item, i) => {
                     this.signals.connect(item, 'activate', () => {
                         Gio.app_info_launch_default_for_uri(items[i].get_uri(), global.create_app_launch_context())
                     });
                 };
                 for (let i = 0; i < itemsLength; i++) {
-                    item = createMenuItem({label: _(items[i].get_short_name()), icon: 'list-add'});
+                    item = createMenuItem({label: _(items[i].get_short_name()), icon: 'xsi-list-add'});
                     handleRecentLaunch(item, i);
                     subMenu.menu.addMenuItem(item);
                 }
@@ -227,7 +207,7 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
         }
 
         if (Main.gpu_offload_supported && !hasWindows) {
-            item = createMenuItem({label: _("Run with NVIDIA GPU"), icon: 'cpu'});
+            item = createMenuItem({label: _("Run with dedicated GPU"), icon: 'xsi-cpu'});
 
             this.signals.connect(item, 'activate', () => this.groupState.trigger('launchNewInstance', true));
 
@@ -238,25 +218,13 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
         // Actions
         tryFn(() => {
             if (!this.groupState.appInfo) return;
-            let actions = this.groupState.appInfo.list_actions();
+            const actions = this.groupState.appInfo.list_actions();
             if (actions) {
                 this.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-                let handleAction = (action) => {
-                    let actionID = '';
-                    if (action.toUpperCase() === action) {
-                        actionID = action.toLowerCase();
-                    } else {
-                        // first letter lowercase, replace uppercase with _+lowercase
-                        actionID = action.charAt(0).toLowerCase() + action.slice(1);
-                        actionID = actionID.replace(/([A-Z])/g, '_$1').toLowerCase();
-                    }
-                    actionID = actionID.replace(/-/g, '_');
-
-                    let icon = 'application-x-executable';
-
-                    if (ICON_NAMES.hasOwnProperty(actionID)) {
-                        icon = ICON_NAMES[actionID];
-                    }
+                const handleAction = (action) => {
+                    let icon = getDesktopActionIcon(action);
+                    if (icon == null)
+                        icon = 'xsi-empty-icon';
 
                     item = createMenuItem({
                         label: _(this.groupState.appInfo.get_action_name(action)),
@@ -285,23 +253,23 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
             let label, icon;
             if (this.groupState.isFavoriteApp) {
                 label = _('Unpin from Panel');
-                icon = 'unpin';
+                icon = 'xsi-unpin';
             } else {
                 label = _('Pin to Panel');
-                icon = 'pin';
+                icon = 'xsi-pin';
             }
             this.pinToggleItem = createMenuItem({label, icon});
             this.signals.connect(this.pinToggleItem, 'activate', (...args) => this.toggleFavorite(...args));
             this.addMenuItem(this.pinToggleItem);
             if (this.state.settings.autoStart) {
-                let label = this.groupState.autoStartIndex !== -1 ? _('Remove from Autostart') : _('Add to Autostart');
-                item = createMenuItem({label: label, icon: 'insert-object'});
+                const label = this.groupState.autoStartIndex !== -1 ? _('Remove from Autostart') : _('Add to Autostart');
+                item = createMenuItem({label: label, icon: 'xsi-insert-object'});
                 this.signals.connect(item, 'activate', (...args) => this.toggleAutostart(...args));
                 this.addMenuItem(item);
             }
         } else {
             this.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-            item = createMenuItem({label: _('Create Shortcut'), icon: 'list-add'});
+            item = createMenuItem({label: _('Create Shortcut'), icon: 'xsi-list-add'});
             this.signals.connect(item, 'activate', (...args) => this.createShortcut(...args));
             this.addMenuItem(item);
         }
@@ -309,7 +277,7 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
 
         // Window controls
         if (hasWindows) {
-            let metaWindowActor = this.groupState.lastFocused.get_compositor_private();
+            const metaWindowActor = this.groupState.lastFocused.get_compositor_private();
             // Miscellaneous
             if (metaWindowActor && metaWindowActor.opacity !== 255) {
                 item = createMenuItem({label: _('Restore to full opacity')});
@@ -318,25 +286,25 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
             }
 
             if (this.groupState.lastFocused.minimized) {
-                item = createMenuItem({label: _('Restore'), icon: 'view-sort-descending'});
+                item = createMenuItem({label: _('Restore'), icon: 'xsi-empty-icon'});
                 this.signals.connect(item, 'activate', () => {
                     Main.activateWindow(this.groupState.lastFocused, global.get_current_time());
                 });
             } else {
-                item = createMenuItem({label: _('Minimize'), icon: 'view-sort-ascending'});
+                item = createMenuItem({label: _('Minimize'), icon: 'xsi-empty-icon'});
                 this.signals.connect(item, 'activate', () => this.groupState.lastFocused.minimize());
             }
             this.addMenuItem(item);
 
             if (this.groupState.lastFocused.get_maximized()) {
-                item = createMenuItem({label: _('Unmaximize'), icon: 'view-restore'});
+                item = createMenuItem({label: _('Unmaximize'), icon: 'xsi-empty-icon'});
                 this.signals.connect(item, 'activate', () => {
                     this.groupState.lastFocused.unmaximize(
                         Meta.MaximizeFlags.HORIZONTAL | Meta.MaximizeFlags.VERTICAL
                     );
                 });
             } else {
-                item = createMenuItem({label: _('Maximize'), icon: 'view-fullscreen'});
+                item = createMenuItem({label: _('Maximize'), icon: 'xsi-empty-icon'});
                 this.signals.connect(item, 'activate', () => {
                     this.groupState.lastFocused.maximize(
                         Meta.MaximizeFlags.HORIZONTAL | Meta.MaximizeFlags.VERTICAL
@@ -348,9 +316,9 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
 
             if (this.groupState.metaWindows && this.groupState.metaWindows.length > 1) {
                 // Close others
-                item = createMenuItem({label: _('Close others'), icon: 'window-close'});
+                item = createMenuItem({label: _('Close others'), icon: 'xsi-window-close'});
                 this.signals.connect(item, 'activate', () => {
-                    each(this.groupState.metaWindows, (metaWindow) => {
+                    this.groupState.metaWindows.forEach( metaWindow => {
                         if (metaWindow !== this.groupState.lastFocused && !metaWindow._needsAttention) {
                             metaWindow.delete(global.get_current_time());
                         }
@@ -361,7 +329,7 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
                 // TODO: We should detect if windows from this group are on another workspace
                 // and close windows across all workspaces while showAllWorkspaces is enabled.
                 // Ditto for 'Close others'.
-                item = createMenuItem({label: _('Close all'), icon: 'application-exit'});
+                item = createMenuItem({label: _('Close all'), icon: 'xsi-exit'});
                 this.signals.connect(item, 'activate', () => {
                     if (!this.groupState.isFavoriteApp) {
                         this.groupState.set({willUnmount: true});
@@ -371,7 +339,7 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
                 this.addMenuItem(item);
                 this.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
             } else {
-                item = createMenuItem({label: _('Close'), icon: 'edit-delete'});
+                item = createMenuItem({label: _('Close'), icon: 'xsi-edit-delete'});
                 this.signals.connect(item, 'activate', () => {
                     this.groupState.lastFocused.delete(global.get_current_time());
                 });
@@ -383,11 +351,15 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
 
     onToggled(actor, isOpening) {
         this.state.set({menuOpen: this.isOpen});
+    }
 
-        if (!isOpening) return;
+    toggle() {
+        if (!this.isOpen) {
+            this.removeAll();
+            this.populateMenu();
+        }
 
-        this.removeAll();
-        this.populateMenu();
+        Applet.AppletPopupMenu.prototype.toggle.call(this);
     }
 
     toggleAutostart() {
@@ -397,7 +369,7 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
             this.state.autoStartApps.splice(this.groupState.autoStartIndex, 1);
             this.groupState.set({autoStartIndex: -1});
         } else {
-            let filePath = this.groupState.appInfo.get_filename();
+            const filePath = this.groupState.appInfo.get_filename();
             trySpawnCommandLine('bash -c "cp ' + filePath + ' ' + autoStartStrDir + '"');
             setTimeout(() => {
                 this.state.trigger('getAutoStartApps');
@@ -419,8 +391,8 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
     }
 
     createShortcut() {
-        let proc = this.groupState.lastFocused.get_pid();
-        let cmd = [
+        const proc = this.groupState.lastFocused.get_pid();
+        const cmd = [
             'bash',
             '-c',
             'python3 /usr/share/cinnamon/applets/grouped-window-list@cinnamon.org/utils.py get_process ' + proc.toString()
@@ -429,43 +401,10 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
             if (stdout) {
                 setTimeout(() => {
                     this.state.trigger('addFavorite', {appId: stdout.trim(), app: null, pos: -1});
-                    this.state.trigger('refreshCurrentAppList');
+                    this.state.trigger('refreshCurrentWorkspace');
                 }, 2000);
             }
         });
-    }
-
-    listDefaultPlaces(pattern) {
-        let defaultPlaces = Main.placesManager.getDefaultPlaces();
-        let res = [];
-        for (let i = 0, len = defaultPlaces.length; i < len; i++) {
-            if (!pattern || defaultPlaces[i].name.toLowerCase().indexOf(pattern) !== -1) {
-                res.push(defaultPlaces[i]);
-            }
-        }
-        return res;
-    }
-
-    listBookmarks(pattern) {
-        let bookmarks = Main.placesManager.getBookmarks();
-        let res = [];
-        for (let i = 0, len = bookmarks.length; i < len; i++) {
-            if (!pattern || bookmarks[i].name.toLowerCase().indexOf(pattern) !== -1) {
-                res.push(bookmarks[i]);
-            }
-        }
-        return res;
-    }
-
-    listDevices(pattern) {
-        let devices = Main.placesManager.getMounts();
-        let res = [];
-        for (let i = 0, len = devices.length; i < len; i++) {
-            if (!pattern || devices[i].name.toLowerCase().indexOf(pattern) !== -1) {
-                res.push(devices[i]);
-            }
-        }
-        return res;
     }
 
     destroy() {
@@ -475,7 +414,7 @@ class AppMenuButtonRightClickMenu extends Applet.AppletPopupMenu {
     }
 }
 
-class HoverMenuController extends PopupMenu.PopupMenuManager {
+var HoverMenuController = class HoverMenuController extends PopupMenu.PopupMenuManager {
     constructor(actor, groupState) {
         super({actor}, false); // owner, shouldGrab
         this.groupState = groupState;
@@ -542,6 +481,8 @@ class WindowThumbnail {
         this.metaWindow = params.metaWindow;
         this.index = params.index;
 
+        this.get_thumb_id = 0;
+
         this.metaWindowActor = null;
         this.thumbnailPadding = 16;
         this.willUnmount = false;
@@ -574,7 +515,7 @@ class WindowThumbnail {
             y_expand: false
         });
 
-        let label = new St.Label({
+        const label = new St.Label({
             style_class: 'grouped-window-list-thumbnail-label',
             important: true
         });
@@ -614,23 +555,17 @@ class WindowThumbnail {
     onEnter(a, e) {
         this.entered = true;
 
-        // Cluter.CrossingEvent will always fire on every child actor of the actor connected to the signal, so we have
-        // to filter the bogus child hover events so the hoverpeek effect only occurs once while inside this.actor.
-
         this.actor.add_style_pseudo_class('selected');
         this.button.set_opacity(255);
 
         if (!e) return;
 
-        let actorString = e.get_source().toString();
-        if (actorString.indexOf('this.actor') > -1
-            && (!this.lastEnterActor
-                || (this.lastEnterActor.indexOf('StButton') === -1)
-                    && this.lastEnterActor.indexOf('ClutterClone') === -1)) {
-            this.destroyOverlayPreview();
-            this.hoverPeek(this.state.settings.peekOpacity);
+        if (e.get_related() === this.button) {
+            return;
         }
-        this.lastEnterActor = actorString;
+
+        this.destroyOverlayPreview();
+        this.hoverPeek(this.state.settings.peekOpacity);
     }
 
     onLeave() {
@@ -641,16 +576,21 @@ class WindowThumbnail {
         this.button.set_opacity(0);
     }
 
-    onWindowDemandsAttention(window) {
-        if (this._needsAttention) {
-            return false;
-        }
-        this._needsAttention = true;
-        if (this.metaWindow === window) {
+    setThumbnailDemandsAttention(attention) {
+        //if (this.metaWindow === window) {
+        if (attention) {
+            if (this._needsAttention) {
+                return;
+            }
+            this._needsAttention = true;
             this.actor.add_style_class_name('grouped-window-list-thumbnail-alert');
-            return true;
+        } else {
+            if (!this._needsAttention) {
+                return;
+            }
+            this._needsAttention = false;
+            this.actor.remove_style_class_name('grouped-window-list-thumbnail-alert');
         }
-        return false;
     }
 
     onFocusWindowChange() {
@@ -686,7 +626,7 @@ class WindowThumbnail {
     }
 
     onCloseButtonRelease(actor, event) {
-        let button = event.get_button();
+        const button = event.get_button();
         if (button === 1 && actor === this.button) {
             this.handleCloseClick();
         }
@@ -697,7 +637,7 @@ class WindowThumbnail {
             this.groupState.trigger('hoverMenuClose');
             return;
         }
-        let button = typeof event === 'number' ? event : event.get_button();
+        const button = typeof event === 'number' ? event : event.get_button();
         if (button === 1 && !this.stopClick) {
             Main.activateWindow(this.metaWindow, global.get_current_time());
             this.groupState.trigger('hoverMenuClose');
@@ -717,36 +657,60 @@ class WindowThumbnail {
         }
         // Create our own thumbnail if it doesn't exist
         if (this.metaWindowActor) {
-            this.signals.disconnect('size-changed', this.metaWindowActor);
+            this.disconnectSizeNotify();
         } else {
             this.metaWindowActor = this.metaWindow.get_compositor_private();
         }
         if (this.metaWindowActor && !this.metaWindowActor.is_finalized()) {
-            this.signals.connect(this.metaWindowActor, 'size-changed', () => this.refreshThumbnail());
+            this.signals.connect(this.metaWindow, 'unmanaging', () => this.disconnectSizeNotify());
 
-            let windowTexture = this.metaWindowActor.get_texture();
-            if (!windowTexture) return;
-            let [width, height] = windowTexture.get_size();
-            let scale = Math.min(1.0, thumbnailWidth / width, thumbnailHeight / height) * global.ui_scale;
+            const texture = this.metaWindowActor.get_texture();
+            if (texture == null) {
+                return;
+            }
+
+            this.signals.connect(texture, 'size-changed', () => this.refreshThumbnail());
+
+            let [width, height] = this.metaWindowActor.get_size();
+            const scale = Math.min(1.0, thumbnailWidth / width, thumbnailHeight / height) * global.ui_scale;
             width = Math.round(width * scale);
             height = Math.round(height * scale);
-            if (this.thumbnailActor.child) {
-                this.thumbnailActor.height = height;
-                this.thumbnailActor.width = width;
-                this.thumbnailActor.child.source = windowTexture;
+            if (this.thumbnailActor.child == null || (this.thumbnailActor.child.name?.startsWith("TextureWindowClone"))) {
+                if (this.thumbnailActor.child != null) {
+                    this.thumbnailActor.child.destroy()
+                }
+
+                this.thumbnailActor.child = WindowUtils.getCloneOrContent(this.metaWindowActor, width, height);
+
+                if (this.thumbnailActor.child.name?.startsWith("TextureWindowClone")) {
+                    this.signals.connect(this.metaWindow, 'notify::minimized', () => this.refreshThumbnail());
+                }
+            } else {
                 this.thumbnailActor.child.width = width;
                 this.thumbnailActor.child.height = height;
-            } else {
-                this.thumbnailActor.child = new Clutter.Clone({
-                    source: windowTexture,
-                    reactive: true,
-                    width,
-                    height
-                });
+                this.thumbnailActor.queue_relayout();
+
             }
         } else if (this.groupState.isFavoriteApp) {
             this.groupState.trigger('removeThumbnailFromMenu', this.metaWindow);
         }
+    }
+
+    disconnectSizeNotify(actor) {
+        this.signals.disconnect('unmanaging', this.metaWindow);
+
+        const texture = this.metaWindowActor.get_texture();
+        if (texture) {
+            this.signals.disconnect("size-changed", texture);
+        }
+        this.signals.disconnect("notify::minimized", this.metaWindow);
+    }
+
+    calcThumbsFullSize(singleThumbSize) {
+        const padding = this.thumbnailActor.style_length('padding');
+        const margin = this.thumbnailActor.style_length('margin');
+        const size = (singleThumbSize + this.thumbnailPadding) * global.ui_scale;
+        return (size + padding + margin) * this.groupState.windowCount;
     }
 
     refreshThumbnail() {
@@ -758,12 +722,12 @@ class WindowThumbnail {
             return;
         }
 
-        let monitor = this.state.trigger('getPanelMonitor');
+        const monitor = this.state.trigger('getPanelMonitor');
         if (!monitor) return;
 
         if (!this.thumbnailActor || this.thumbnailActor.is_finalized()) return;
 
-        let divider = 80 * global.ui_scale;
+        const divider = 80 * global.ui_scale;
         let {thumbSize} = this.state.settings;
 
         if (monitor.height / global.ui_scale <= 1024) {
@@ -784,16 +748,15 @@ class WindowThumbnail {
             thumbnailSize = thumbnailWidth;
         }
 
-        let padding = this.thumbnailActor.style_length('padding');
-        let margin = this.thumbnailActor.style_length('margin');
 
         let i = 0;
-        while (((thumbnailSize + this.thumbnailPadding + padding + margin) * this.groupState.windowCount > monitorSize)
-            && thumbnailWidth > 64
-            && thumbnailHeight > 64) {
+        while (this.calcThumbsFullSize(thumbnailSize) > monitorSize &&
+               thumbnailWidth > 64 && thumbnailHeight > 64) {
+            // ---
             thumbnailWidth -= 1;
             thumbnailHeight -= 1;
             thumbnailSize -= 1;
+
             i++;
             // Bail after 200 iterations
             if (i > 200) {
@@ -803,22 +766,32 @@ class WindowThumbnail {
 
         // If we can't fit all the thumbnails, revert to a vertical menu orientation
         // with no thumbnails, which can hold more window selections.
-        let verticalThumbs = ((thumbnailSize + this.thumbnailPadding + padding + margin) * this.groupState.windowCount) > monitorSize;
-        let currentVerticalThumbsState = this.groupState.verticalThumbs;
+        const verticalThumbs = this.calcThumbsFullSize(thumbnailSize) > monitorSize;
+        const currentVerticalThumbsState = this.groupState.verticalThumbs;
         this.groupState.set({verticalThumbs});
+
         if (verticalThumbs !== currentVerticalThumbsState) return;
 
-        let scaledWidth = thumbnailWidth * global.ui_scale;
-        this.thumbnailActor.width = scaledWidth;
+        this.thumbnailActor.width = thumbnailWidth * global.ui_scale;
         this.container.style = `width: ${Math.floor(thumbnailWidth - 16)}px;`;
-        if (this.groupState.verticalThumbs || (this.state.settings.verticalThumbs && this.state.settings.showThumbs)) {
-            this.thumbnailActor.height = thumbnailHeight;
-        } else if (this.state.settings.verticalThumbs) {
+
+        if (this.state.settings.verticalThumbs && !this.groupState.verticalThumbs && !this.state.settings.showThumbs) {
             this.thumbnailActor.height = 0;
+        } else {
+            this.thumbnailActor.height = thumbnailHeight * global.ui_scale;
         }
 
         this.labelContainer.child.text = this.metaWindow.title || '';
-        this.getThumbnail(thumbnailWidth, thumbnailHeight);
+
+        if (this.get_thumb_id > 0) {
+            Mainloop.source_remove(this.get_thumb_id);
+        }
+
+        this.get_thumb_id = Mainloop.timeout_add(0, () => {
+            this.get_thumb_id = 0;
+            this.getThumbnail(thumbnailWidth, thumbnailHeight);
+            return false;
+        });
     }
 
     hoverPeek(opacity) {
@@ -830,14 +803,15 @@ class WindowThumbnail {
         if (!this.metaWindowActor) {
             this.metaWindowActor = this.metaWindow.get_compositor_private();
         }
-        this.state.set({
-            lastOverlayPreview: new Clutter.Clone({
-                source: this.metaWindowActor.get_texture(),
-                opacity: 0
-            })
-        });
+
+        const preview = WindowUtils.getCloneOrContent(this.metaWindowActor);
+        preview.opacity = 0;
+        this.state.set({ lastOverlayPreview: preview });
+
         let [x, y] = this.metaWindowActor.get_position();
+        let [width, height] = this.metaWindowActor.get_size();
         this.state.lastOverlayPreview.set_position(x, y);
+        this.state.lastOverlayPreview.set_size(width, height);
         global.overlay_group.add_child(this.state.lastOverlayPreview);
         global.overlay_group.set_child_above_sibling(this.state.lastOverlayPreview, null);
         setOpacity(this.state.settings.peekTimeIn, this.state.lastOverlayPreview, opacity);
@@ -847,7 +821,7 @@ class WindowThumbnail {
         if (!this.state.lastOverlayPreview) return;
 
         if (this.state.settings.peekTimeOut) {
-            let currOverlayPreview = this.state.lastOverlayPreview;
+            const currOverlayPreview = this.state.lastOverlayPreview;
             setOpacity(
                 this.state.settings.peekTimeOut,
                 currOverlayPreview,
@@ -872,6 +846,11 @@ class WindowThumbnail {
         this.willUnmount = true;
         if (!this.groupState) return;
 
+        if (this.get_thumb_id > 0) {
+            Mainloop.source_remove(this.get_thumb_id);
+            this.get_thumb_id = 0;
+        }
+
         this.state.disconnect(this.stateConnectId);
         this.groupState.disconnect(this.connectId);
         this.signals.disconnectAllSignals();
@@ -882,7 +861,7 @@ class WindowThumbnail {
     }
 }
 
-class AppThumbnailHoverMenu extends PopupMenu.PopupMenu {
+var AppThumbnailHoverMenu = class AppThumbnailHoverMenu extends PopupMenu.PopupMenu {
     _init(state, groupState) {
         super._init.call(this, groupState.trigger('getActor'), state.orientation, 0.5);
         this.state = state;
@@ -904,8 +883,8 @@ class AppThumbnailHoverMenu extends PopupMenu.PopupMenu {
                 // over the menu and closes it if not.
                 setTimeout(() => {
                     let [x, y, mask] = global.get_pointer();
-                    let draggedOverActor = global.stage.get_actor_at_pos(Clutter.PickMode.ALL, x, y);
-                    let parent = draggedOverActor.get_parent();
+                    const draggedOverActor = global.stage.get_actor_at_pos(Clutter.PickMode.ALL, x, y);
+                    const parent = draggedOverActor.get_parent();
                     if (!(parent instanceof St.Widget)) {
                         this.close(true);
                     }
@@ -920,7 +899,7 @@ class AppThumbnailHoverMenu extends PopupMenu.PopupMenu {
                 this.queuedWindows.push(win);
             },
             removeThumbnailFromMenu: (win) => {
-                let index = findIndex(this.appThumbnails, (item) => item.metaWindow === win);
+                let index = this.appThumbnails.findIndex( item => item.metaWindow === win);
                 if (index > -1) {
                     this.appThumbnails[index].destroy();
                     this.appThumbnails[index] = undefined;
@@ -931,7 +910,7 @@ class AppThumbnailHoverMenu extends PopupMenu.PopupMenu {
             },
             verticalThumbs: () => {
                 // Preserve the menu's open state after refreshing
-                let {isOpen} = this;
+                const {isOpen} = this;
                 this.setVerticalSetting();
                 if (isOpen) this.open(true);
             },
@@ -942,18 +921,18 @@ class AppThumbnailHoverMenu extends PopupMenu.PopupMenu {
                     // 50ms loop until the menu closes so we continue getting data in the absence of events.
                     this.interval = setInterval(() => {
                         let [x, y, mask] = global.get_pointer();
-                        let draggedOverActor = global.stage.get_actor_at_pos(Clutter.PickMode.ALL, x, y);
+                        const draggedOverActor = global.stage.get_actor_at_pos(Clutter.PickMode.ALL, x, y);
                         if (draggedOverActor instanceof Meta.ShapedTexture) {
                             this.groupState.set({fileDrag: false});
                             this.close(true);
                             return;
                         }
-                        each(this.appThumbnails, function(thumbnail) {
+                        for (const thumbnail of this.appThumbnails) {
                             if (thumbnail.thumbnailActor === draggedOverActor) {
                                 Main.activateWindow(thumbnail.metaWindow, global.get_current_time());
-                                return false;
+                                break;
                             }
-                        });
+                        }
                     }, 50);
                 } else if (this.interval) {
                     clearInterval(this.interval);
@@ -968,7 +947,7 @@ class AppThumbnailHoverMenu extends PopupMenu.PopupMenu {
 
     addQueuedThumbnails() {
         if (this.queuedWindows.length === 0) return;
-        each(this.queuedWindows, (win) => this.addThumbnail(win));
+        this.queuedWindows.forEach( win => this.addThumbnail(win));
         this.queuedWindows = [];
     }
 
@@ -1020,7 +999,7 @@ class AppThumbnailHoverMenu extends PopupMenu.PopupMenu {
     }
 
     onKeyRelease(actor, event) {
-        let symbol = event.get_key_symbol();
+        const symbol = event.get_key_symbol();
         if (this.isOpen && (symbol === Clutter.KEY_Super_L || symbol === Clutter.KEY_Super_R)) {
             // Close this menu, if opened by super + #
             this.close(true);
@@ -1071,16 +1050,14 @@ class AppThumbnailHoverMenu extends PopupMenu.PopupMenu {
     }
 
     onKeyPress(actor, e) {
-        let {orientation} = this.state;
-        let {vertical} = this.box;
+        const {orientation} = this.state;
+        const {vertical} = this.box;
 
-        let symbol = e.get_key_symbol();
-        let i = findIndex(this.appThumbnails, (item) => item.entered === true);
-        let entered = i > -1;
+        const symbol = e.get_key_symbol();
+        let i = this.appThumbnails.findIndex( item => item.entered === true );
+        const entered = i > -1;
         if (!entered) {
-            i = findIndex(this.appThumbnails, function(thumbnail) {
-                return thumbnail.isFocused;
-            });
+            i = this.appThumbnails.findIndex( thumbnail => thumbnail.isFocused );
             if (i === -1) {
                 i = 0;
             }
@@ -1173,9 +1150,9 @@ class AppThumbnailHoverMenu extends PopupMenu.PopupMenu {
                 return b.metaWindow.user_time - a.metaWindow.user_time;
             });
         }
-        let refThumb = findIndex(this.appThumbnails, (thumbnail) => thumbnail.metaWindow === metaWindow);
+        const refThumb = this.appThumbnails.findIndex( thumbnail => thumbnail.metaWindow === metaWindow );
         if (!this.appThumbnails[refThumb] && refThumb === -1) {
-            let thumbnail = new WindowThumbnail({
+            const thumbnail = new WindowThumbnail({
                 state: this.state,
                 groupState: this.groupState,
                 metaWindow: metaWindow,
@@ -1233,7 +1210,7 @@ class AppThumbnailHoverMenu extends PopupMenu.PopupMenu {
         this.willUnmount = true;
         if (!this.box) return;
 
-        if (this.isOpen) this.close();
+        if (this.isOpen) this.close(true);
 
         for (let w = 0, len = this.appThumbnails.length; w < len; w++) {
             if (this.appThumbnails[w] !== undefined) {

@@ -4,7 +4,7 @@ import gi
 gi.require_version('UPowerGlib', '1.0')
 from gi.repository import UPowerGlib
 
-from SettingsWidgets import SidePage
+from bin.SettingsWidgets import SidePage
 from xapp.GSettingsWidgets import *
 
 POWER_BUTTON_OPTIONS = [
@@ -44,6 +44,12 @@ SLEEP_DELAY_OPTIONS = [
     (10800, _("3 hours")),
     (0, _("Never"))
 ]
+
+POWER_PROFILES = {
+    "power-saver": _("Power Saver"),
+    "balanced": _("Balanced"),
+    "performance": _("Performance")
+}
 
 (UP_ID, UP_VENDOR, UP_MODEL, UP_TYPE, UP_ICON, UP_PERCENTAGE, UP_STATE, UP_BATTERY_LEVEL, UP_SECONDS) = range(9)
 
@@ -140,9 +146,9 @@ class Module:
 
         power_page = SettingsPage()
 
-        section = power_page.add_section(_("Power Options"))
+        section = power_page.add_section(_("Power options"))
 
-        lid_options, button_power_options, critical_options, can_suspend, can_hybrid_sleep, can_hibernate = get_available_options(self.up_client)
+        lid_options, button_power_options, critical_options, can_suspend, can_hybrid_sleep, can_hibernate = get_available_options()
 
         size_group = Gtk.SizeGroup(mode=Gtk.SizeGroupMode.HORIZONTAL)
 
@@ -198,6 +204,26 @@ class Module:
             self.sth_switch.content_widget.connect("notify::active", self.on_sth_toggled)
             section.add_row(self.sth_switch)
 
+        # Power mode
+        connection = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
+        proxy = None
+        profiles = None
+        for dbus_name in ["net.hadess.PowerProfiles", "org.freedesktop.UPower.PowerProfiles"]:
+            try:
+                dbus_path = "/" + dbus_name.replace(".", "/")
+                proxy = Gio.DBusProxy.new_sync(connection, Gio.DBusProxyFlags.NONE, None,
+                            dbus_name, dbus_path, "org.freedesktop.DBus.Properties", None)
+                profiles = proxy.Get('(ss)', dbus_name, "Profiles")
+                print(f"Found power profiles on Dbus at {dbus_name}")
+                break
+            except:
+                pass
+
+        if profiles:
+            combo = PowerModeComboBox(proxy, dbus_name, profiles)
+            combo.set_tooltip_text(_("Power mode controls the power usage of your computer. It can impact performance, battery life and fan noise."))
+            section.add_row(combo)
+
         # Batteries
 
         self.battery_page = SettingsPage()
@@ -219,7 +245,7 @@ class Module:
         try:
             brightness = proxy.GetPercentage()
         except GLib.Error as e:
-            print("Power module brightness page not available: %s" % e.message)
+            print(f"Power module brightness page not available: {e.message}")
 
             if self.show_battery_page:
                 self.sidePage.add_widget(self.sidePage.stack)
@@ -258,7 +284,7 @@ class Module:
             try:
                 brightness = proxy.GetPercentage()
             except GLib.Error as e:
-                print("Power module no keyboard backlight: %s" % e.message)
+                print(f"Power module no keyboard backlight: {e.message}")
             else:
                 section = page.add_section(_("Keyboard backlight"))
                 section.add_row(BrightnessSlider(section, proxy, _("Backlight brightness")))
@@ -294,8 +320,11 @@ class Module:
         # UPowerGlib segfaults when trying to get device. Use CSD instead
         devices = self.csd_power_proxy.GetDevices()
 
-        have_primary = False
         ups_as_primary = False
+
+        have_keyboard = False
+        have_mouse = False
+        have_other = False
 
         # first we look for a discharging UPS, which is promoted to the
         # primary device if it's discharging. Otherwise we use the first
@@ -316,16 +345,10 @@ class Module:
                 else:
                     primary_settings.add_row(self.set_device_ups_primary(device))
             elif device[UP_TYPE] == UPowerGlib.DeviceKind.BATTERY and not ups_as_primary:
-                if not have_primary:
-                    if not primary_settings:
-                        primary_settings = self.battery_page.add_section(_("Batteries"))
-                        primary_settings.add_row(self.set_device_battery_primary(device))
-                        self.show_battery_page = True
-                    have_primary = True
-                else:
-                    widget = self.set_device_battery_additional(device)
-                    if widget:
-                        primary_settings.add_row(widget)
+                if not primary_settings:
+                    primary_settings = self.battery_page.add_section(_("Batteries"))
+                primary_settings.add_row(self.set_device_battery_primary(device))
+                self.show_battery_page = True
             else:
                 if not secondary_settings:
                     secondary_settings = self.battery_page.add_section(_("Devices"))
@@ -333,6 +356,21 @@ class Module:
                     self.show_battery_page = True
                 else:
                     secondary_settings.add_row(self.add_battery_device_secondary(device))
+                if device[UP_TYPE] == UPowerGlib.DeviceKind.KEYBOARD:
+                    have_keyboard = True
+                elif device[UP_TYPE] == UPowerGlib.DeviceKind.MOUSE:
+                    have_mouse = True
+                else:
+                    have_other = True
+
+        if have_keyboard or have_mouse or have_other:
+            notification_settings = self.battery_page.add_section(_("Low battery notifications"))
+            if have_keyboard or have_other:
+                notification_settings.add_row(GSettingsSwitch(_("For wireless keyboard"), CSD_SCHEMA, "power-notifications-for-keyboard"))
+            if have_mouse or have_other:
+                notification_settings.add_row(GSettingsSwitch(_("For wireless mouse"), CSD_SCHEMA, "power-notifications-for-mouse"))
+            if have_other:
+                notification_settings.add_row(GSettingsSwitch(_("For other connected devices"), CSD_SCHEMA, "power-notifications-for-other-devices"))
 
         #show all the widgets in this page, but not the page itself
         visible = self.battery_page.get_visible()
@@ -369,8 +407,8 @@ class Module:
                 details = UPowerGlib.Device.state_to_string(state)
 
         desc = _("UPS")
-        if (model != "" or vendor != ""):
-            desc = "%s %s" % (vendor, model)
+        if model != "" or vendor != "":
+            desc = f"{vendor} {model}"
 
         widget = self.create_battery_row(device_id, "battery", desc, percentage, battery_level, details)
         return widget
@@ -398,10 +436,14 @@ class Module:
             else:
                 details = UPowerGlib.Device.state_to_string(state)
         else:
-            if state == UPowerGlib.DeviceState.CHARGING or state == UPowerGlib.DeviceState.PENDING_CHARGE:
+            if state == UPowerGlib.DeviceState.CHARGING:
                 details = _("Charging")
-            elif state == UPowerGlib.DeviceState.DISCHARGING or state == UPowerGlib.DeviceState.PENDING_DISCHARGE:
+            elif state == UPowerGlib.DeviceState.PENDING_CHARGE:
+                details = _("Not charging")
+            elif state == UPowerGlib.DeviceState.DISCHARGING:
                 details = _("Using battery power")
+            elif state == UPowerGlib.DeviceState.PENDING_DISCHARGE:
+                details = _("Not discharging")
             elif state == UPowerGlib.DeviceState.FULLY_CHARGED:
                 details = _("Charging - fully charged")
             elif state == UPowerGlib.DeviceState.EMPTY:
@@ -410,35 +452,11 @@ class Module:
                 details = UPowerGlib.Device.state_to_string(state)
 
         desc = _("Battery")
-        if (model != "" or vendor != ""):
-            desc = "%s %s" % (vendor, model)
+        if model != "" or vendor != "":
+            desc = f"{vendor} {model}"
 
         widget = self.create_battery_row(device_id, "battery", desc, percentage, battery_level, details)
         return widget
-
-    def set_device_battery_additional(self, device):
-        state = device[UP_STATE]
-        details = None
-
-        if state == UPowerGlib.DeviceState.FULLY_CHARGED:
-            details = _("Fully charged")
-        elif state == UPowerGlib.DeviceState.EMPTY:
-            details = _("Empty")
-
-        if details:
-            widget = SettingsWidget()
-            icon = Gtk.Image.new_from_icon_name("battery", Gtk.IconSize.DND)
-            widget.pack_start(icon, False, False, 0)
-            label = Gtk.Label(_("Secondary battery"))
-            widget.pack_start(label, False, False, 0)
-            label = Gtk.Label()
-            label.set_markup(details)
-            label.get_style_context().add_class("dim-label")
-            widget.pack_end(label, False, False, 0)
-
-            return widget
-        else:
-            return None
 
     def add_battery_device_secondary(self, device):
         device_id = device[UP_ID]
@@ -472,12 +490,15 @@ class Module:
         elif kind == UPowerGlib.DeviceKind.COMPUTER:
             icon_name = "computer"
             desc = _("Computer")
+        elif kind == UPowerGlib.DeviceKind.GAMING_INPUT:
+            icon_name = "input-gaming"
+            desc = (_("Battery"))
         else:
             icon_name = "battery"
             desc = (_("Battery"))
 
-        if (model != "" or vendor != ""):
-            desc = "%s %s" % (vendor, model)
+        if model != "" or vendor != "":
+            desc = f"{vendor} {model}"
 
         widget = self.create_battery_row(device_id, icon_name, desc, percentage, battery_level)
         return widget
@@ -552,48 +573,27 @@ class Module:
         self.aliases[device_id] = entry.get_text()
         aliases = []
         for alias in self.aliases:
-            aliases.append("%s:=%s" % (alias, self.aliases[alias]))
+            aliases.append(f"{alias}:={self.aliases[alias]}")
         self.settings.set_strv("device-aliases", aliases)
 
 
-def get_available_options(up_client):
+def get_available_options():
     can_suspend = False
     can_hibernate = False
     can_hybrid_sleep = False
 
-    # Try logind first
+    # There's no reason this should ever fail as a normal user
     try:
-        connection = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
-        proxy = Gio.DBusProxy.new_sync(
-            connection,
-            Gio.DBusProxyFlags.NONE,
-            None,
-            "org.freedesktop.login1",
-            "/org/freedesktop/login1",
-            "org.freedesktop.login1.Manager",
-            None)
+        proxy = Gio.DBusProxy.new_for_bus_sync(
+                    Gio.BusType.SESSION,
+                    Gio.DBusProxyFlags.NONE,
+                    None,
+                    "org.gnome.SessionManager",
+                    "/org/gnome/SessionManager",
+                    "org.cinnamon.SessionManager.EndSessionDialog",
+                    None)
 
-        can_suspend = proxy.CanSuspend() == "yes"
-        can_hibernate = proxy.CanHibernate() == "yes"
-        can_hybrid_sleep = proxy.CanHybridSleep() == "yes"
-    except:
-        pass
-
-    # Next try ConsoleKit
-    try:
-        connection = Gio.bus_get_sync(Gio.BusType.SYSTEM, None)
-        proxy = Gio.DBusProxy.new_sync(
-            connection,
-            Gio.DBusProxyFlags.NONE,
-            None,
-            "org.freedesktop.ConsoleKit",
-            "/org/freedesktop/ConsoleKit/Manager",
-            "org.freedesktop.ConsoleKit.Manager",
-            None)
-
-        can_suspend = can_suspend or (proxy.CanSuspend() == "yes")
-        can_hibernate = can_hibernate or (proxy.CanHybridSleep() == "yes")
-        can_hybrid_sleep = can_hybrid_sleep or (proxy.CanHybridSleep() == "yes")
+        __, __, __, can_hybrid_sleep, can_suspend, can_hibernate, __ = proxy.GetCapabilities()
     except:
         pass
 
@@ -621,6 +621,7 @@ def get_available_options(up_client):
     ]
 
     critical_options = [
+        ("suspend", _("Suspend")),
         ("shutdown", _("Shut down immediately")),
         ("hibernate", _("Hibernate")),
         ("nothing", _("Do nothing"))
@@ -803,7 +804,7 @@ class GSettings2ComboBox(SettingsWidget):
 
     def on_my_value_changed(self, widget):
         tree_iter = widget.get_active_iter()
-        if tree_iter != None:
+        if tree_iter is not None:
             self.settings[widget.key] = self.model[tree_iter][0]
 
     def on_my_setting_changed1(self, *args):
@@ -821,3 +822,70 @@ class GSettings2ComboBox(SettingsWidget):
     def add_to_size_group(self, group):
         group.add_widget(self.content_widget1)
         group.add_widget(self.content_widget2)
+
+
+class PowerModeComboBox(SettingsWidget):
+    def __init__(self, proxy, dbus_name, profiles, dep_key=None, size_group=None):
+        super(PowerModeComboBox, self).__init__(dep_key=dep_key)
+
+        self.proxy = proxy
+        self.dbus_name = dbus_name
+        
+        try:            
+            profiles_options = []
+            for profile in profiles:
+                name = profile["Profile"]
+                label = name
+                if name in POWER_PROFILES.keys():
+                    label = POWER_PROFILES[name]
+                profiles_options.append([name, label])
+
+            self.option_map = {}
+
+            self.label = Gtk.Label.new(_("Power mode"))
+            self.model = Gtk.ListStore(str, str)
+
+            for option in profiles_options:
+                iter = self.model.insert_before(None, None)
+                self.model.set_value(iter, 0, option[0])
+                self.model.set_value(iter, 1, option[1])
+                self.option_map[option[0]] = iter
+
+            self.content_widget = Gtk.ComboBox.new_with_model(self.model)
+            renderer_text = Gtk.CellRendererText()
+            self.content_widget.pack_start(renderer_text, True)
+            self.content_widget.add_attribute(renderer_text, "text", 1)
+
+            self.pack_start(self.label, False, False, 0)
+            self.pack_end(self.content_widget, False, True, 0)
+
+            self.content_widget.connect('changed', self.on_my_value_changed)
+            self.proxy.connect('g-signal', self.on_dbus_changed)
+            self.on_my_setting_changed()
+
+            if size_group:
+                self.add_to_size_group(size_group)
+        except GLib.Error as e:
+            print(f"Power profiles options not available: {e.message}")
+
+    def on_my_value_changed(self, widget):
+        tree_iter = widget.get_active_iter()
+        if tree_iter is not None:
+            profile = self.model[tree_iter][0]
+            value = GLib.Variant.new_string(profile)
+            self.proxy.Set('(ssv)', self.dbus_name, "ActiveProfile", value)
+
+    def on_dbus_changed(self, proxy, sender, signal, params):
+        if signal == "PropertiesChanged":
+            self.on_my_setting_changed()
+
+    def on_my_setting_changed(self):
+        try:
+            active_profile = self.proxy.Get('(ss)', self.dbus_name, "ActiveProfile")
+            self.content_widget.set_active_iter(self.option_map[active_profile])
+        except Exception as e:
+            print(e)
+            self.content_widget.set_active_iter(None)
+
+    def add_to_size_group(self, group):
+        group.add_widget(self.content_widget)

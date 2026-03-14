@@ -13,14 +13,40 @@ option('build_recorder',
     value: true,
     description: 'Build the cinnamon recorder into source'
 )
-option('disable_networkmanager',
-    type: 'boolean',
-    value: false,
-    description: 'Build without networkmanager'
+option('nm_agent',
+    type: 'combo',
+    choices: ['internal', 'external', 'disabled'],
+    value: 'internal',
+    description: 'Which network agent to use - internal: use built-in, external: require nm-applet in the session, disabled: not using NetworkManager'
 )
 option('py3modules_dir',
     type : 'string',
     value : '',
     description: 'Where to install python3 modules'
+)
+option('wayland',
+    type : 'boolean',
+    value : true,
+    description: 'Enable wayland support'
+)
+option('exclude_info_settings',
+    type : 'boolean',
+    value : false,
+    description: 'Exclude Info settings'
+)
+option('exclude_users_settings',
+    type : 'boolean',
+    value : false,
+    description: 'Exclude Users settings'
+)
+option('pam_prefix',
+    type : 'string',
+    value : '',
+    description: 'Specify where pam files go'
+)
+option('use_debian_pam',
+    type : 'boolean',
+    value : false,
+    description: 'Use the debian pam file'
 )
 

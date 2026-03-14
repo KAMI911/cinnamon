@@ -10,7 +10,10 @@
 #define GMENU_I_KNOW_THIS_IS_UNSTABLE
 #include <gmenu-desktopappinfo.h>
 
+#include <libxapp/xapp-gpu-offload-helper.h>
+
 #include <meta/display.h>
+#include <meta/meta-workspace-manager.h>
 
 #include "cinnamon-app-private.h"
 #include "cinnamon-enum-types.h"
@@ -187,7 +190,7 @@ get_actor_for_icon_name (CinnamonApp *app,
 
   if (icon != NULL)
   {
-    actor = g_object_new (ST_TYPE_ICON, "gicon", icon, "icon-size", size, NULL);
+    actor = g_object_new (ST_TYPE_ICON, "gicon", icon, "icon-type", ST_ICON_FULLCOLOR, "icon-size", size, NULL);
     g_object_unref (icon);
   }
 
@@ -198,24 +201,27 @@ static ClutterActor *
 get_failsafe_icon (int size)
 {
   GIcon *icon = g_themed_icon_new ("application-x-executable");
-  ClutterActor *actor = g_object_new (ST_TYPE_ICON, "gicon", icon, "icon-size", size, NULL);
+  ClutterActor *actor = g_object_new (ST_TYPE_ICON, "gicon", icon, "icon-type", ST_ICON_FULLCOLOR, "icon-size", size, NULL);
   g_object_unref (icon);
   return actor;
 }
 
+
 static ClutterActor *
 window_backed_app_get_icon (CinnamonApp *app,
-                            int          size)
+                            int       size)
 {
   MetaWindow *window = NULL;
-  GdkPixbuf *pixbuf;
-  gint scale;
+  StWidget *widget;
+  int scale, scaled_size;
   CinnamonGlobal *global;
   StThemeContext *context;
 
-  global = app->global;
-  context = st_theme_context_get_for_stage (global->stage);
+  global = cinnamon_global_get ();
+  context = st_theme_context_get_for_stage (cinnamon_global_get_stage (global));
   g_object_get (context, "scale-factor", &scale, NULL);
+
+  scaled_size = size * scale;
 
   /* During a state transition from running to not-running for
    * window-backend apps, it's possible we get a request for the icon.
@@ -224,39 +230,74 @@ window_backed_app_get_icon (CinnamonApp *app,
   if (app->running_state != NULL)
     window = window_backed_app_get_window (app);
 
-  size *= scale;
-
   if (window == NULL)
-    return get_failsafe_icon (size);
+    {
+      ClutterActor *actor;
 
-  pixbuf = meta_window_create_icon (window, size);
+      actor = clutter_actor_new ();
+      g_object_set (actor,
+                    "opacity", 0,
+                    "width", (float) scaled_size,
+                    "height", (float) scaled_size,
+                    NULL);
+      return actor;
+    }
 
-  if (pixbuf == NULL)
-    return get_failsafe_icon (size);
+  widget = NULL;
 
-  return st_texture_cache_load_from_pixbuf (pixbuf, size);
+  if (meta_window_get_client_type (window) == META_WINDOW_CLIENT_TYPE_X11)
+    {
+      cairo_surface_t *icon;
+
+      g_object_get (G_OBJECT (window), "icon", &icon, NULL);
+
+      if (icon != NULL)
+        {
+          StWidget *texture_actor;
+
+          texture_actor =
+            st_texture_cache_bind_cairo_surface_property (st_texture_cache_get_default (),
+                                                          G_OBJECT (window),
+                                                          "icon",
+                                                          scaled_size);
+
+          widget = g_object_new (ST_TYPE_BIN,
+                                 "child", texture_actor,
+                                 NULL);
+        }
+    }
+
+  if (widget == NULL)
+    {
+      widget = g_object_new (ST_TYPE_ICON,
+                             "icon-size", size,
+                             "icon-type", ST_ICON_FULLCOLOR,
+                             "icon-name", "application-x-executable",
+                             NULL);
+    }
+  st_widget_add_style_class_name (widget, "fallback-app-icon");
+
+  return CLUTTER_ACTOR (widget);
 }
 
 /**
  * cinnamon_app_create_icon_texture:
- * @app: a #CinnamonApp
- * @size: the size of the icon to create
  *
- * Look up the icon for this application, and create a #ClutterTexture
+ * Look up the icon for this application, and create a #ClutterActor
  * for it at the given size.
  *
  * Return value: (transfer none): A floating #ClutterActor
  */
 ClutterActor *
 cinnamon_app_create_icon_texture (CinnamonApp   *app,
-                                  int            size)
+                               int         size)
 {
   GIcon *icon;
   ClutterActor *ret;
 
   ret = NULL;
 
-  if (app->entry == NULL)
+  if (app->info == NULL)
     return window_backed_app_get_icon (app, size);
 
   icon = g_app_info_get_icon (G_APP_INFO (app->info));
@@ -269,6 +310,7 @@ cinnamon_app_create_icon_texture (CinnamonApp   *app,
 
   return ret;
 }
+
 
 /**
  * cinnamon_app_create_icon_texture_for_window:
@@ -523,9 +565,9 @@ cinnamon_app_activate_window (CinnamonApp     *app,
     {
       GSList *iter;
       CinnamonGlobal *global = app->global;
-      MetaScreen *screen = global->meta_screen;
+      MetaWorkspaceManager *workspace_manager = global->workspace_manager;
       MetaDisplay *display = global->meta_display;
-      MetaWorkspace *active = meta_screen_get_active_workspace (screen);
+      MetaWorkspace *active = meta_workspace_manager_get_active_workspace (workspace_manager);
       MetaWorkspace *workspace = meta_window_get_workspace (window);
       guint32 last_user_timestamp = meta_display_get_last_user_time (display);
       MetaWindow *most_recent_transient;
@@ -778,7 +820,7 @@ cinnamon_app_get_windows (CinnamonApp *app)
     {
       CompareWindowsData data;
       data.app = app;
-      data.active_workspace = meta_screen_get_active_workspace (app->global->meta_screen);
+      data.active_workspace = meta_workspace_manager_get_active_workspace (app->global->workspace_manager);
       app->running_state->windows = g_slist_sort_with_data (app->running_state->windows, cinnamon_app_compare_windows, &data);
       app->running_state->window_sort_stale = FALSE;
     }
@@ -897,7 +939,7 @@ cinnamon_app_on_unmanaged (MetaWindow      *window,
 }
 
 static void
-cinnamon_app_on_ws_switch (MetaScreen         *screen,
+cinnamon_app_on_ws_switch (MetaWorkspaceManager *workspace_manager,
                         int                 from,
                         int                 to,
                         MetaMotionDirection direction,
@@ -983,25 +1025,24 @@ cinnamon_app_get_pids (CinnamonApp *app)
 
 void
 _cinnamon_app_handle_startup_sequence (CinnamonApp          *app,
-                                    SnStartupSequence *sequence)
+                                       MetaStartupSequence  *sequence)
 {
-  gboolean starting = !sn_startup_sequence_get_completed (sequence);
+  gboolean starting = !meta_startup_sequence_get_completed (sequence);
 
-  /* The Cinnamon design calls for on application launch, the app title
+  /* The Shell design calls for on application launch, the app title
    * appears at top, and no X window is focused.  So when we get
    * a startup-notification for this app, transition it to STARTING
    * if it's currently stopped, set it as our application focus,
    * but focus the no_focus window.
    */
-  if (starting && app->state == CINNAMON_APP_STATE_STOPPED)
+  if (starting && cinnamon_app_get_state (app) == CINNAMON_APP_STATE_STOPPED)
     {
-      MetaScreen *screen = app->global->meta_screen;
-      MetaDisplay *display = meta_screen_get_display (screen);
+      MetaDisplay *display = cinnamon_global_get_display (cinnamon_global_get ());
 
       cinnamon_app_state_transition (app, CINNAMON_APP_STATE_STARTING);
-      meta_display_focus_the_no_focus_window (display, screen,
-                                              sn_startup_sequence_get_timestamp (sequence));
-      app->started_on_workspace = sn_startup_sequence_get_workspace (sequence);
+      meta_display_unset_input_focus (display,
+                                      meta_startup_sequence_get_timestamp (sequence));
+      app->started_on_workspace = meta_startup_sequence_get_workspace (sequence);
     }
 
   if (!starting)
@@ -1124,8 +1165,19 @@ _gather_pid_callback (GDesktopAppInfo   *gapp,
 static void
 apply_discrete_gpu_env (GAppLaunchContext *context)
 {
-  g_app_launch_context_setenv (context, "__NV_PRIME_RENDER_OFFLOAD", "1");
-  g_app_launch_context_setenv (context, "__GLX_VENDOR_LIBRARY_NAME", "nvidia");
+  XAppGpuOffloadHelper *helper = xapp_gpu_offload_helper_get_sync ();
+  GList *infos = xapp_gpu_offload_helper_get_offload_infos (helper);
+
+  if (infos != NULL)
+    {
+      XAppGpuInfo *info = infos->data;
+      gchar **env_strv = info->env_strv;
+
+      for (gint i = 0; i < g_strv_length (env_strv); i += 2)
+        {
+          g_app_launch_context_setenv (context, env_strv[i], env_strv[i + 1]);
+        }
+    }
 }
 
 static gboolean
@@ -1137,11 +1189,10 @@ real_app_launch (CinnamonApp   *app,
                   gboolean      offload,
                   GError      **error)
 {
-  GdkAppLaunchContext *context;
+  GAppLaunchContext *context;
   gboolean ret;
   CinnamonGlobal *global;
-  MetaScreen *screen;
-  GdkDisplay *gdisplay;
+  MetaWorkspaceManager *workspace_manager;
 
   if (startup_id)
     *startup_id = NULL;
@@ -1159,18 +1210,16 @@ real_app_launch (CinnamonApp   *app,
     }
 
   global = app->global;
-  screen = global->meta_screen;
-  gdisplay = global->gdk_display;
+  workspace_manager = global->workspace_manager;
 
-  if (timestamp == 0)
-    timestamp = cinnamon_global_get_current_time (global);
+  context = cinnamon_global_create_app_launch_context (global);
 
-  if (workspace < 0)
-    workspace = meta_screen_get_active_workspace_index (screen);
-
-  context = gdk_display_get_app_launch_context (gdisplay);
-  gdk_app_launch_context_set_timestamp (context, timestamp);
-  gdk_app_launch_context_set_desktop (context, workspace);
+  if (workspace >= 0)
+    {
+      MetaWorkspace *ws;
+      ws = meta_workspace_manager_get_workspace_by_index (workspace_manager, workspace);
+      meta_launch_context_set_workspace (META_LAUNCH_CONTEXT (context), ws);
+    }
 
   GMenuDesktopAppInfo *launch_info;
   GMenuDesktopAppInfo *offload_appinfo = NULL;
@@ -1238,7 +1287,12 @@ cinnamon_app_launch (CinnamonApp     *app,
                      GError         **error)
 {
   GMenuDesktopAppInfo *app_info = cinnamon_app_get_app_info(app);
-  gboolean wants_offload = (app_info && gmenu_desktopappinfo_get_boolean(app_info, "PrefersNonDefaultGPU"));
+
+  XAppGpuOffloadHelper *helper = xapp_gpu_offload_helper_get_sync ();
+
+  gboolean wants_offload = (app_info &&
+                            gmenu_desktopappinfo_get_boolean(app_info, "PrefersNonDefaultGPU") &&
+                            xapp_gpu_offload_helper_is_offload_supported (helper));
   return real_app_launch (app,
                           timestamp,
                           uris,
@@ -1302,21 +1356,21 @@ cinnamon_app_get_tree_entry (CinnamonApp *app)
 static void
 create_running_state (CinnamonApp *app)
 {
-  MetaScreen *screen;
+  MetaWorkspaceManager *workspace_manager;
 
   g_assert (app->running_state == NULL);
 
-  screen = app->global->meta_screen;
+  workspace_manager = app->global->workspace_manager;
   app->running_state = g_slice_new0 (CinnamonAppRunningState);
   app->running_state->refcount = 1;
   app->running_state->workspace_switch_id =
-    g_signal_connect (screen, "workspace-switched", G_CALLBACK(cinnamon_app_on_ws_switch), app);
+    g_signal_connect (workspace_manager, "workspace-switched", G_CALLBACK(cinnamon_app_on_ws_switch), app);
 }
 
 static void
 unref_running_state (CinnamonAppRunningState *state)
 {
-  MetaScreen *screen;
+  MetaWorkspaceManager *workspace_manager;
   CinnamonGlobal *global;
 
   state->refcount--;
@@ -1324,9 +1378,9 @@ unref_running_state (CinnamonAppRunningState *state)
     return;
 
   global = cinnamon_global_get ();
-  screen = global->meta_screen;
+  workspace_manager = global->workspace_manager;
 
-  g_signal_handler_disconnect (screen, state->workspace_switch_id);
+  g_signal_handler_disconnect (workspace_manager, state->workspace_switch_id);
   g_slice_free (CinnamonAppRunningState, state);
 }
 

@@ -3,7 +3,6 @@
 const Gio = imports.gi.Gio;
 const GLib = imports.gi.GLib;
 const Gtk = imports.gi.Gtk;
-const Tweener = imports.ui.tweener;
 const Clutter = imports.gi.Clutter;
 const St = imports.gi.St;
 const Main = imports.ui.main;
@@ -32,11 +31,14 @@ Animation.prototype = {
 
     prepare: function() {
         try {
-            this.shroud = new Clutter.Actor({ width: global.screen_width,
-                                              height: global.screen_height,
-                                              reactive: false,
-                                              background_color: new Clutter.Color( { red: 0, green: 0, blue: 0, alpha: 255} )
-                                            });
+            this.shroud = new Clutter.Actor({
+                reactive: false,
+                background_color: new Clutter.Color( { red: 0, green: 0, blue: 0, alpha: 255} )
+            });
+
+            let constraint = new Clutter.BindConstraint({ source: global.stage, coordinate: Clutter.BindCoordinate.ALL });
+            this.shroud.add_constraint(constraint);
+
             Main.layoutManager.addChrome(this.shroud);
 
             let icon_size = 128 * global.ui_scale;
@@ -89,12 +91,13 @@ Animation.prototype = {
         }
 
         try {
-            Tweener.addTween(this.logo,
-                             { time: .75,
-                               opacity: 0,
-                               transition: 'easeInExpo',
-                               onComplete: this._fade_shroud,
-                               onCompleteScope: this });
+            this.logo.ease({
+                opacity: 0,
+                duration: 750,
+                animationRequired: true,
+                mode: Clutter.AnimationMode.EASE_IN_EXPO,
+                onComplete: () => this._fade_shroud()
+            });
         } catch (e) {
             this._onError(e);
         }
@@ -102,12 +105,13 @@ Animation.prototype = {
 
     _fade_shroud: function() {
         try {
-            Tweener.addTween(this.shroud,
-                             { time: .75,
-                               transition: 'easeNone',
-                               opacity: 0,
-                               onComplete: this._finished,
-                               onCompleteScope: this });
+            this.shroud.ease({
+                opacity: 0,
+                duration: 750,
+                animationRequired: true,
+                mode: Clutter.AnimationMode.LINEAR,
+                onComplete: () => this._finished()
+            });
         } catch (e) {
             this._onError(e);
         }
@@ -120,12 +124,12 @@ Animation.prototype = {
 
     _finished: function() {
         if (this.shroud) {
-            this.shroud.destroy();
+            Main.layoutManager.removeChrome(this.shroud);
             this.shroud = null;
         }
 
         if (this.logo) {
-            this.logo.destroy();
+            Main.layoutManager.removeChrome(this.logo);
             this.logo = null;
         }
 

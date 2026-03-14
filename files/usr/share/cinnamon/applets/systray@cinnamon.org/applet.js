@@ -1,13 +1,14 @@
 const Lang = imports.lang;
 const St = imports.gi.St;
 const Clutter = imports.gi.Clutter;
-
+const GLib = imports.gi.GLib;
 const Applet = imports.ui.applet;
 const PopupMenu = imports.ui.popupMenu;
 const Main = imports.ui.main;
 const Mainloop = imports.mainloop;
 const SignalManager = imports.misc.signalManager;
 const {findIndex} = imports.misc.util;
+const Meta = imports.gi.Meta;
 
 const NO_RESIZE_ROLES = ['shutter', 'filezilla'];
 
@@ -22,25 +23,15 @@ class CinnamonSystrayApplet extends Applet.Applet {
         this.actor.set_important(true);  // ensure we get class details from the default theme if not present
 
         this._signalManager = new SignalManager.SignalManager(null);
-        let manager;
+        this._scaleUpdateId = 0;
 
         this.orientation = orientation;
         this.icon_size = this.getPanelIconSize(St.IconType.FULLCOLOR) * global.ui_scale;
 
-        if (this.orientation == St.Side.TOP || this.orientation == St.Side.BOTTOM) {
-            manager = new Clutter.BoxLayout( { spacing: 4,
-                                               orientation: Clutter.Orientation.HORIZONTAL });
-        } else {
-            manager = new Clutter.BoxLayout( { spacing: 4,
-                                               orientation: Clutter.Orientation.VERTICAL });
-        }
+        this.button_box = new St.BoxLayout({ vertical: [St.Side.LEFT, St.Side.RIGHT].includes(this.orientation) });
 
-        this.update_na_tray_orientation();
-
-        this.manager = manager;
-        this.manager_container = new Clutter.Actor( { layout_manager: manager } );
-        this.actor.add_actor (this.manager_container);
-        this.manager_container.show();
+        this.actor.add_actor (this.button_box);
+        this.button_box.show();
     }
 
     on_applet_clicked(event) {
@@ -48,9 +39,9 @@ class CinnamonSystrayApplet extends Applet.Applet {
 
     on_orientation_changed(neworientation) {
         if (neworientation == St.Side.TOP || neworientation == St.Side.BOTTOM) {
-            this.manager.set_vertical(false);
+            this.button_box.set_vertical(false);
         } else {
-            this.manager.set_vertical(true);
+            this.button_box.set_vertical(true);
         }
 
         this.update_na_tray_orientation();
@@ -76,6 +67,8 @@ class CinnamonSystrayApplet extends Applet.Applet {
 
     on_applet_removed_from_panel() {
         this._signalManager.disconnectAllSignals();
+
+        this._clearIcons();
     }
 
     on_applet_added_to_panel() {
@@ -83,10 +76,14 @@ class CinnamonSystrayApplet extends Applet.Applet {
             Main.statusIconDispatcher.start(this.actor.get_parent().get_parent());
         }
 
+        this.update_na_tray_orientation();
+
         this._signalManager.connect(Main.statusIconDispatcher, 'status-icon-added', this._onTrayIconAdded, this);
         this._signalManager.connect(Main.statusIconDispatcher, 'status-icon-removed', this._onTrayIconRemoved, this);
         this._signalManager.connect(Main.statusIconDispatcher, 'before-redisplay', this._onBeforeRedisplay, this);
         this._signalManager.connect(Main.systrayManager, "changed", Main.statusIconDispatcher.redisplay, Main.statusIconDispatcher);
+        this._signalManager.connect(global, "scale-changed", this.uiScaleChanged, this);
+        this._signalManager.connect(global.settings, 'changed::panel-edit-mode', this.on_panel_edit_mode_changed, this);
 
         if (global.trayReloading) {
             global.trayReloading = false;
@@ -94,24 +91,45 @@ class CinnamonSystrayApplet extends Applet.Applet {
         }
     }
 
-    on_panel_icon_size_changed(size) {
-        this.icon_size = size * global.ui_scale;
+    _clearIcons() {
+        this.button_box.get_children().forEach((button) => {
+            // button.set_size(-1, -1);
+            button.remove_actor(button.child);
+            button.destroy();
+        });
+    }
+
+    resizeIcons() {
+        this.icon_size = this.getPanelIconSize() * global.ui_scale;
         Main.statusIconDispatcher.redisplay();
+    }
+
+    on_panel_icon_size_changed(size) {
+        this.resizeIcons();
+    }
+
+    on_panel_edit_mode_changed() {
+        this.resizeIcons();
+    }
+
+    uiScaleChanged() {
+        if (this._scaleUpdateId > 0) {
+            Mainloop.source_remove(this._scaleUpdateId);
+        }
+
+        this._scaleUpdateId = Mainloop.timeout_add(1500, () => {
+            this.resizeIcons();
+
+            this._scaleUpdateId = 0;
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _onBeforeRedisplay() {
         // Mark all icons as obsolete
         // There might still be pending delayed operations to insert/resize of them
         // And that would crash Cinnamon
-
-        let children = this.manager_container.get_children().filter(function(child) {
-            // We are only interested in the status icons and apparently we can not ask for
-            // child instanceof CinnamonTrayIcon.
-            return (child.toString().indexOf("CinnamonTrayIcon") != -1);
-        });
-        for (let i = 0; i < children.length; i++) {
-            children[i].destroy();
-        }
+        this._clearIcons();
     }
 
     _onTrayIconAdded(o, icon, role) {
@@ -126,48 +144,77 @@ class CinnamonSystrayApplet extends Applet.Applet {
 
             global.log("Adding systray: " + role + " (" + icon.get_width() + "x" + icon.get_height() + "px)");
 
-            let parent = icon.get_parent();
-            if (parent) parent.remove_child(icon);
+            let button = new St.Bin(
+            {
+                style_class: "applet-box",
+                child: icon
+            })
 
-            this._insertStatusItem(role, icon);
+            icon.set_x_align(Clutter.ActorAlign.CENTER);
+            icon.set_y_align(Clutter.ActorAlign.FILL);
+            button.set_y_align(Clutter.ActorAlign.FILL);
 
+            icon.visible = false;
+            icon.opacity = 0;
+            GLib.timeout_add(GLib.PRIORITY_DEFAULT, 1000, () => {
+                if (icon.is_finalized()) {
+                    button.destroy();
+                    return GLib.SOURCE_REMOVE;
+                }
+
+                icon.reactive = true;
+                icon.visible = true;
+                icon.set_size(this.icon_size, this.icon_size);
+                icon.ease({
+                    opacity: 255,
+                    duration: 400,
+                    mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                });
+
+                icon.connect("event", (actor, event) => this._onEvent(actor, event));
+                return GLib.SOURCE_REMOVE;
+            });
+
+            this.button_box.insert_child_at_index(button, 0);
         } catch (e) {
             global.logError(e);
         }
     }
 
+    _onEvent(icon, event) {
+        let etype = event.type();
+        const button = icon.get_parent();
+
+        if (button == null) {
+            return GLib.SOURCE_REMOVE;
+        }
+
+        if (etype === Clutter.EventType.BUTTON_PRESS) {
+            global.begin_modal(Meta.ModalOptions.POINTER_ALREADY_GRABBED, event.time);
+        }
+        else
+        if (etype === Clutter.EventType.ENTER) {
+            button.add_style_pseudo_class("hover");
+        }
+        else
+        if (etype === Clutter.EventType.LEAVE) {
+            button.remove_style_pseudo_class("hover");
+        }
+
+        let ret = icon.handle_event(etype, event);
+
+        if (etype === Clutter.EventType.BUTTON_PRESS) {
+            global.end_modal(event.time);
+        }
+
+        return ret;
+    }
+
     _onTrayIconRemoved(o, icon) {
-        if (icon.get_parent() === this.manager_container) {
-            this.manager_container.remove_child(icon);
-        }
+        const parent = icon.get_parent();
 
-        icon.destroy();
-    }
-
-    _insertStatusItem(role, icon) {
-        if (icon.is_finalized()) {
-            return;
-        }
-        this.manager_container.insert_child_at_index(icon, 0);
-
-        if (["skypeforlinux"].indexOf(role) != -1) {
-            let size = 16 * global.ui_scale;
-            icon.set_size(size, size);
-            global.log("Resize " + role + " with hardcoded size (" + icon.get_width() + "x" + icon.get_height() + "px)");
-        }
-        else {
-            this._resizeStatusItem(role, icon);
-        }
-    }
-
-    _resizeStatusItem(role, icon) {
-        if (NO_RESIZE_ROLES.indexOf(role) > -1) {
-            global.log("Not resizing " + role + " as it's known to be buggy (" + icon.get_width() + "x" + icon.get_height() + "px)");
-        } else {
-            icon.set_size(this.icon_size, this.icon_size);
-            global.log("Resized " + role + " with normalized size (" + icon.get_width() + "x" + icon.get_height() + "px)");
-            //Note: dropbox doesn't scale, even though we resize it...
-        }
+        parent.remove_actor(icon);
+        parent.destroy()
     }
 }
 

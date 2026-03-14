@@ -217,7 +217,7 @@ MyApplet.prototype =
             this.settings = new AppletSettings(this, "finder@cinnamon.org", instanceId);
             this.settings.bind("launch_shortcut", "launch_shortcut", this.on_launch_shortcut_changed, null);
 
-            this.set_applet_icon_name("edit-find-symbolic");
+            this.set_applet_icon_name("xsi-edit-find-symbolic");
             this.set_applet_tooltip(_("Search using search providers"));
 
             let menuManager = new PopupMenu.PopupMenuManager(this);
@@ -260,6 +260,7 @@ MyApplet.prototype =
             });
             this._scrollBox.add_actor(this._container);
             this._scrollBox.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.AUTOMATIC);
+            this._scrollBox.set_clip_to_allocation(true);
             this._scrollBox.set_auto_scrolling(true);
 
             this.searchEntryText = this.searchEntry.clutter_text;
@@ -288,7 +289,11 @@ MyApplet.prototype =
 
     on_launch_shortcut_changed: function()
     {
-        Main.keybindingManager.addHotKey("finder_launch", this.launch_shortcut, Lang.bind(this, this.launch));
+        Main.keybindingManager.addXletHotKey(this, "finder_launch", this.launch_shortcut, Lang.bind(this, this.launch));
+    },
+
+    on_applet_removed_from_panel () {
+        Main.keybindingManager.removeXletHotKey(this, "finder_launch");
     },
 
     _onSearchTextChanged: function(se, prop)

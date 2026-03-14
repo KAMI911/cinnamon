@@ -40,6 +40,7 @@
 
 #include "st-button.h"
 
+#include "st-icon.h"
 #include "st-enum-types.h"
 #include "st-texture-cache.h"
 #include "st-private.h"
@@ -51,6 +52,7 @@ enum
   PROP_0,
 
   PROP_LABEL,
+  PROP_ICON_NAME,
   PROP_BUTTON_MASK,
   PROP_TOGGLE_MODE,
   PROP_CHECKED,
@@ -66,6 +68,7 @@ enum
 
 struct _StButtonPrivate
 {
+  ClutterInputDevice *device;
   gchar *text;
 
   guint  button_mask : 3;
@@ -159,11 +162,14 @@ st_button_button_press (ClutterActor       *actor,
 {
   StButton *button = ST_BUTTON (actor);
   StButtonMask mask = ST_BUTTON_MASK_FROM_BUTTON (event->button);
+  ClutterInputDevice *device = clutter_event_get_device ((ClutterEvent*) event);
+
+  button->priv->device = device;
 
   if (button->priv->button_mask & mask)
     {
       if (button->priv->grabbed == 0)
-        clutter_grab_pointer (actor);
+        clutter_input_device_grab (device, actor);
 
       button->priv->grabbed |= mask;
       st_button_press (button, mask);
@@ -180,6 +186,7 @@ st_button_button_release (ClutterActor       *actor,
 {
   StButton *button = ST_BUTTON (actor);
   StButtonMask mask = ST_BUTTON_MASK_FROM_BUTTON (event->button);
+  ClutterInputDevice *device = clutter_event_get_device ((ClutterEvent*) event);
 
   if (button->priv->button_mask & mask)
     {
@@ -190,7 +197,7 @@ st_button_button_release (ClutterActor       *actor,
 
       button->priv->grabbed &= ~mask;
       if (button->priv->grabbed == 0)
-        clutter_ungrab_pointer ();
+        clutter_input_device_ungrab (device);
 
       return TRUE;
     }
@@ -311,6 +318,9 @@ st_button_set_property (GObject      *gobject,
     case PROP_LABEL:
       st_button_set_label (button, g_value_get_string (value));
       break;
+    case PROP_ICON_NAME:
+      st_button_set_icon_name (button, g_value_get_string (value));
+      break;
     case PROP_BUTTON_MASK:
       st_button_set_button_mask (button, g_value_get_flags (value));
       break;
@@ -340,6 +350,9 @@ st_button_get_property (GObject    *gobject,
     {
     case PROP_LABEL:
       g_value_set_string (value, priv->text);
+      break;
+    case PROP_ICON_NAME:
+      g_value_set_string (value, st_button_get_icon_name (ST_BUTTON (gobject)));
       break;
     case PROP_BUTTON_MASK:
       g_value_set_flags (value, priv->button_mask);
@@ -399,6 +412,12 @@ st_button_class_init (StButtonClass *klass)
                                "Label of the button",
                                NULL, G_PARAM_READWRITE);
   g_object_class_install_property (gobject_class, PROP_LABEL, pspec);
+
+  pspec = g_param_spec_string ("icon-name",
+                               "Icon name",
+                               "Icon name of the button",
+                               NULL, G_PARAM_READWRITE);
+  g_object_class_install_property (gobject_class, PROP_ICON_NAME, pspec);
 
   pspec = g_param_spec_flags ("button-mask",
                               "Button mask",
@@ -549,6 +568,66 @@ st_button_set_label (StButton    *button,
 }
 
 /**
+ * st_button_get_icon_name:
+ * @button: a #StButton
+ *
+ * Get the icon name of the button. If the button isn't showing an icon,
+ * the return value will be %NULL.
+ *
+ * Returns: (transfer none) (nullable): the icon name of the button
+ */
+const char *
+st_button_get_icon_name (StButton *button)
+{
+  ClutterActor *icon;
+
+  g_return_val_if_fail (ST_IS_BUTTON (button), NULL);
+
+  icon = st_bin_get_child (ST_BIN (button));
+  if (ST_IS_ICON (icon))
+    return st_icon_get_icon_name (ST_ICON (icon));
+  return NULL;
+}
+
+/**
+ * st_button_set_icon_name:
+ * @button: a #Stbutton
+ * @icon_name: an icon name
+ *
+ * Adds an `StIcon` with the given icon name as a child.
+ *
+ * If @button already contains a child actor, that child will
+ * be removed and replaced with the icon.
+ */
+void
+st_button_set_icon_name (StButton   *button,
+                         const char *icon_name)
+{
+  ClutterActor *icon;
+
+  g_return_if_fail (ST_IS_BUTTON (button));
+  g_return_if_fail (icon_name != NULL);
+
+  icon = st_bin_get_child (ST_BIN (button));
+
+  if (ST_IS_ICON (icon))
+    {
+      st_icon_set_icon_name (ST_ICON (icon), icon_name);
+    }
+  else
+    {
+      icon = g_object_new (ST_TYPE_ICON,
+                           "icon-name", icon_name,
+                           "x-align", CLUTTER_ACTOR_ALIGN_CENTER,
+                           "y-align", CLUTTER_ACTOR_ALIGN_CENTER,
+                           NULL);
+      st_bin_set_child (ST_BIN (button), icon);
+    }
+
+  g_object_notify (G_OBJECT (button), "icon-name");
+}
+
+/**
  * st_button_get_button_mask:
  * @button: a #StButton
  *
@@ -681,7 +760,11 @@ st_button_fake_release (StButton *button)
   if (button->priv->grabbed)
     {
       button->priv->grabbed = 0;
-      clutter_ungrab_pointer ();
+      if (button->priv->device != NULL)
+        {
+          clutter_input_device_ungrab (button->priv->device);
+          button->priv->device = NULL;
+        }
     }
 }
 

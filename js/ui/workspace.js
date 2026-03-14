@@ -13,14 +13,13 @@ const DND = imports.ui.dnd;
 const Main = imports.ui.main;
 const Overview = imports.ui.overview;
 const PopupMenu = imports.ui.popupMenu;
-const Tweener = imports.ui.tweener;
 const PointerTracker = imports.misc.pointerTracker;
 const GridNavigator = imports.misc.gridNavigator;
 const WindowUtils = imports.misc.windowUtils;
 
 const WINDOW_DND_SIZE = 256;
 
-const CLOSE_BUTTON_FADE_TIME = 0.1;
+const CLOSE_BUTTON_FADE_TIME = 100;
 
 const DEMANDS_ATTENTION_CLASS_NAME = "window-list-item-demands-attention";
 
@@ -66,7 +65,7 @@ WindowClone.prototype = {
 
         this._stackAbove = null;
 
-        let sizeChangedId = this.realWindow.connect('size-changed',
+        let sizeChangedId = this.realWindow.connect('notify::size',
                 this._onRealWindowSizeChanged.bind(this));
         let workspaceChangedId = this.metaWindow.connect('workspace-changed',
                 (w, oldws) => this.emit('workspace-changed', oldws));
@@ -91,7 +90,7 @@ WindowClone.prototype = {
     refreshClone: function(withTransients) {
         this.actor.destroy_all_children();
 
-        let {x, y, width, height} = this.metaWindow.get_outer_rect();
+        let {x, y, width, height} = this.metaWindow.get_frame_rect();
         let clones = WindowUtils.createWindowClone(this.metaWindow, 0, 0, withTransients);
         let leftGap, topGap;
         for (let clone of clones) {
@@ -325,10 +324,11 @@ WindowOverlay.prototype = {
         this.show();
         this._parentActor.raise_top();
         this.caption.opacity = 0;
-        Tweener.addTween(this.caption,
-                       { opacity: 255,
-                         time: CLOSE_BUTTON_FADE_TIME,
-                         transition: 'easeOutQuad' });
+        this.caption.ease({
+            opacity: 255,
+            duration: CLOSE_BUTTON_FADE_TIME,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD
+        });
     },
 
     _idleHideCloseButton: function(timeout) {
@@ -352,11 +352,12 @@ WindowOverlay.prototype = {
         }
         for (let item of [this.closeButton, this.border]) {
             item.opacity = 255;
-            Tweener.addTween(item,
-                           { opacity: 0,
-                             time: CLOSE_BUTTON_FADE_TIME,
-                             transition: 'easeInQuad',
-                             onComplete: item.hide });
+            item.ease({
+                opacity: 0,
+                duration: CLOSE_BUTTON_FADE_TIME,
+                mode: Clutter.AnimationMode.EASE_IN_QUAD,
+                onComplete: () => item.hide()
+            });
         }
         this.caption.remove_style_pseudo_class('focus');
     },
@@ -366,10 +367,11 @@ WindowOverlay.prototype = {
         for (let item of [this.closeButton, this.border]) {
             item.show();
             item.opacity = 0;
-            Tweener.addTween(item,
-                           { opacity: 255,
-                             time: CLOSE_BUTTON_FADE_TIME,
-                             transition: 'easeInQuad' });
+            item.ease({
+                opacity: 255,
+                duration: CLOSE_BUTTON_FADE_TIME,
+                mode: Clutter.AnimationMode.EASE_IN_QUAD
+            });
         }
         this.caption.add_style_pseudo_class('focus');
     },
@@ -545,9 +547,9 @@ WorkspaceMonitor.prototype = {
             this._windowRemovedId = this.metaWorkspace.connect('window-removed',
                                                   this._windowRemoved.bind(this));
         }
-        this._windowEnteredMonitorId = global.screen.connect('window-entered-monitor',
+        this._windowEnteredMonitorId = global.display.connect('window-entered-monitor',
                                               this._windowEnteredMonitor.bind(this));
-        this._windowLeftMonitorId = global.screen.connect('window-left-monitor',
+        this._windowLeftMonitorId = global.display.connect('window-left-monitor',
                                               this._windowLeftMonitor.bind(this));
 
         this._animating = false; // Indicate if windows are being repositioned
@@ -680,7 +682,7 @@ WorkspaceMonitor.prototype = {
      */
     _computeWindowLayout: function(metaWindow, slot) {
         let [x, y, width, height] = this._getSlotGeometry(slot);
-        let rect = metaWindow.get_outer_rect();
+        let rect = metaWindow.get_frame_rect();
         let topBorder = 0, bottomBorder = 0, leftBorder = 0, rightBorder = 0;
 
         if (this._windows.length) {
@@ -715,7 +717,7 @@ WorkspaceMonitor.prototype = {
         // Start the animations
         let slots = this._computeAllWindowSlots(clones.length);
 
-        let currentWorkspace = global.screen.get_active_workspace();
+        let currentWorkspace = global.workspace_manager.get_active_workspace();
         let isOnCurrentWorkspace = this.metaWorkspace == null || this.metaWorkspace == currentWorkspace;
 
         if (clones.length > 0 && animate && isOnCurrentWorkspace) {
@@ -750,27 +752,26 @@ WorkspaceMonitor.prototype = {
                         clone.actor.y = y + clone.actor.height * scale / 2;
                     }
 
-
-                     // Make the window slightly transparent to indicate it's hidden
-                     Tweener.addTween(clone.actor,
-                                      { opacity: 255,
-                                        time: Overview.ANIMATION_TIME,
-                                        transition: 'easeInQuad'
-                                      });
+                    // Make the window slightly transparent to indicate it's hidden
+                    clone.actor.ease({
+                        opacity: 255,
+                        duration: Overview.ANIMATION_TIME,
+                        mode: Clutter.AnimationMode.EASE_IN_QUAD
+                    });
                 }
 
-                Tweener.addTween(clone.actor,
-                                 { x: x,
-                                   y: y,
-                                   scale_x: scale,
-                                   scale_y: scale,
-                                   time: Overview.ANIMATION_TIME,
-                                   transition: 'easeOutQuad',
-                                   onComplete: () => {
-                                       this._animating = false
-                                       this._showWindowOverlay(clone, true);
-                                   }
-                                 });
+                clone.actor.ease({
+                    x: x,
+                    y: y,
+                    scale_x: scale,
+                    scale_y: scale,
+                    duration: Overview.ANIMATION_TIME,
+                    mode: Clutter.AnimationMode.EASE_IN_OUT_QUAD,
+                    onComplete: () => {
+                        this._animating = false
+                        this._showWindowOverlay(clone, true);
+                    }
+                });
             } else {
                 clone.actor.set_position(x, y);
                 clone.actor.set_scale(scale, scale);
@@ -830,7 +831,7 @@ WorkspaceMonitor.prototype = {
     },
 
     _showAllOverlays: function() {
-        let currentWorkspace = global.screen.get_active_workspace();
+        let currentWorkspace = global.workspace_manager.get_active_workspace();
         let fade = this.metaWorkspace == null || this.metaWorkspace === currentWorkspace;
         for (let clone of this._windows) {
             this._showWindowOverlay(clone, fade);
@@ -893,7 +894,7 @@ WorkspaceMonitor.prototype = {
             else
                 this._updateEmptyPlaceholder();
         } else {
-            let animate = Main.wm.settingsState['desktop-effects-workspace'];
+            let animate = Main.animations_enabled;
             this.positionWindows(animate ? WindowPositionFlags.ANIMATE : 0);
         }
 
@@ -932,7 +933,7 @@ WorkspaceMonitor.prototype = {
 
         if (this.actor.get_stage()) {
             clone._is_new_window = true;
-            let animate = Main.wm.settingsState['desktop-effects-workspace'];
+            let animate = Main.animations_enabled;
             this.positionWindows(animate ? WindowPositionFlags.ANIMATE : 0);
         }
     },
@@ -945,13 +946,13 @@ WorkspaceMonitor.prototype = {
         this._doRemoveWindow(metaWin);
     },
 
-    _windowEnteredMonitor : function(metaScreen, monitorIndex, metaWin) {
+    _windowEnteredMonitor : function(metaDisplay, monitorIndex, metaWin) {
         if (monitorIndex === this.monitorIndex) {
             this._doAddWindow(metaWin);
         }
     },
 
-    _windowLeftMonitor : function(metaScreen, monitorIndex, metaWin) {
+    _windowLeftMonitor : function(metaDisplay, monitorIndex, metaWin) {
         if (monitorIndex === this.monitorIndex) {
             this._doRemoveWindow(metaWin);
         }
@@ -971,7 +972,7 @@ WorkspaceMonitor.prototype = {
 
     // Animate the full-screen to Overview transition.
     zoomToOverview : function() {
-        let animate = Main.wm.settingsState['desktop-effects-workspace'];
+        let animate = Main.animations_enabled;
         // Position and scale the windows.
         if (Main.overview.animationInProgress && animate)
             this.positionWindows(WindowPositionFlags.ANIMATE | WindowPositionFlags.INITIAL);
@@ -983,7 +984,7 @@ WorkspaceMonitor.prototype = {
 
     // Animates the return from Overview mode
     zoomFromOverview : function() {
-        let currentWorkspace = global.screen.get_active_workspace();
+        let currentWorkspace = global.workspace_manager.get_active_workspace();
 
         this.leavingOverview = true;
 
@@ -995,7 +996,7 @@ WorkspaceMonitor.prototype = {
         if (this.metaWorkspace != null && this.metaWorkspace != currentWorkspace)
             return;
 
-        let animate = Main.wm.settingsState['desktop-effects-workspace'];
+        let animate = Main.animations_enabled;
         if (!animate)
             return;
 
@@ -1004,34 +1005,34 @@ WorkspaceMonitor.prototype = {
             let clone = this._windows[i];
 
             if (clone.metaWindow.showing_on_its_workspace()) {
-                Tweener.addTween(clone.actor,
-                                 { x: clone.origX,
-                                   y: clone.origY,
-                                   scale_x: 1.0,
-                                   scale_y: 1.0,
-                                   time: Overview.ANIMATION_TIME,
-                                   opacity: 255,
-                                   transition: 'easeOutQuad'
-                                 });
+                clone.actor.ease({
+                    x: clone.origX,
+                    y: clone.origY,
+                    scale_x: 1.0,
+                    scale_y: 1.0,
+                    opacity: 255,
+                    duration: Overview.ANIMATION_TIME * 0.45,
+                    mode: Clutter.AnimationMode.EASE_OUT_QUAD
+                });
             } else {
                 // The window is hidden, make it shrink and fade it out
-                Tweener.addTween(clone.actor,
-                                 { scale_x: 0,
-                                   scale_y: 0,
-                                   x: this._width / 2,
-                                   y: this._height / 2,
-                                   opacity: 0,
-                                   time: Overview.ANIMATION_TIME,
-                                   transition: 'easeOutQuad'
-                                 });
+                clone.actor.ease({
+                    scale_x: 0,
+                    scale_y: 0,
+                    x: this._width / 2,
+                    y: this._height / 2,
+                    opacity: 0,
+                    duration: Overview.ANIMATION_TIME,
+                    mode: Clutter.AnimationMode.EASE_OUT_QUAD
+                });
             }
         }
 
         if (this._emptyPlaceHolder.visible) {
-            Tweener.addTween(this._emptyPlaceHolder, {
+            this._emptyPlaceHolder.ease({
                 opacity: 0,
-                time: Overview.ANIMATION_TIME,
-                transition: 'easeOutQuad'
+                duration: Overview.ANIMATION_TIME,
+                mode: Clutter.AnimationMode.EASE_OUT_QUAD
             });
         }
     },
@@ -1046,15 +1047,15 @@ WorkspaceMonitor.prototype = {
             Main.overview.disconnect(this._overviewHiddenId);
             this._overviewHiddenId = 0;
         }
-        Tweener.removeTweens(actor);
+        actor.remove_all_transitions();
 
         this._myWorkspace.myView.disconnect(this.stickyCallbackId);
         if (this.metaWorkspace) {
             this.metaWorkspace.disconnect(this._windowAddedId);
             this.metaWorkspace.disconnect(this._windowRemovedId);
         }
-        global.screen.disconnect(this._windowEnteredMonitorId);
-        global.screen.disconnect(this._windowLeftMonitorId);
+        global.display.disconnect(this._windowEnteredMonitorId);
+        global.display.disconnect(this._windowLeftMonitorId);
 
         // Usually, the windows will be destroyed automatically with
         // their parent (this.actor), but we might have a zoomed window

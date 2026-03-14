@@ -1,6 +1,6 @@
 #!/usr/bin/python3
 
-from SettingsWidgets import SidePage
+from bin.SettingsWidgets import SidePage
 from xapp.GSettingsWidgets import *
 
 
@@ -38,11 +38,14 @@ class Module:
             switch = GSettingsSwitch(_("Display Expo view as a grid"), "org.cinnamon", "workspace-expo-view-as-grid")
             settings.add_row(switch)
 
+            switch = GSettingsSwitch(_("Always show Expo on the primary monitor"), "org.cinnamon", "workspace-expo-primary-monitor")
+            settings.add_row(switch)
+
             # Edge Flip doesn't work well, so it's there in gsettings, but we don't show it to users yet
             # switch = GSettingsSwitch(_("Enable Edge Flip"), "org.cinnamon", "enable-edge-flip")
             # settings.add_row(switch)
             # spin = GSettingsSpinButton(_("Edge Flip delay"), "org.cinnamon", "edge-flip-delay", mini=1, maxi=3000, units=_("ms"))
             # settings.add_reveal_row(spin, "org.cinnamon", "enable-edge-flip")
 
-            switch = GSettingsSwitch(_("Invert the left and right arrow key directions used to shift workspaces during a window drag"), "org.cinnamon.muffin", "invert-workspace-flip-direction")
-            settings.add_row(switch)
+            # switch = GSettingsSwitch(_("Invert the left and right arrow key directions used to shift workspaces during a window drag"), "org.cinnamon.muffin", "invert-workspace-flip-direction")
+            # settings.add_row(switch)

@@ -1,16 +1,28 @@
 // -*- mode: js; js-indent-level: 4; indent-tabs-mode: nil -*-
 
 const Main = imports.ui.main;
-const Gdk = imports.gi.Gdk;
-const Keymap = Gdk.Keymap.get_default();
 const SignalManager = imports.misc.signalManager;
 const Gio = imports.gi.Gio;
 const CDesktopEnums = imports.gi.CDesktopEnums;
-const Flashspot = imports.ui.flashspot;
-
+const Clutter = imports.gi.Clutter;
+const Dialogs = imports.ui.wmGtkDialogs;
+const Cairo = imports.cairo;
+const St = imports.gi.St;
+const GObject = imports.gi.GObject;
 
 const CAPS = 0;
 const NUM = 1;
+
+const HOVERKEY_ACTIONS = {
+    "single": Clutter.PointerA11yDwellClickType.PRIMARY,
+    "double": Clutter.PointerA11yDwellClickType.DOUBLE,
+    "drag": Clutter.PointerA11yDwellClickType.DRAG,
+    "secondary": Clutter.PointerA11yDwellClickType.SECONDARY
+}
+
+const HOVERKEY_ACTION_NAMES = Object.fromEntries(
+    Object.entries(HOVERKEY_ACTIONS).map(([k, v]) => [v, k])
+);
 
 function A11yHandler(){
     this._init();
@@ -19,15 +31,21 @@ function A11yHandler(){
 A11yHandler.prototype = {
     _init: function() {
         this.a11y_keyboard_settings = new Gio.Settings( { schema_id: "org.cinnamon.desktop.a11y.keyboard" });
+        this.a11y_mouse_settings = new Gio.Settings( { schema_id: "org.cinnamon.desktop.a11y.mouse" });
         this.wm_settings = new Gio.Settings( { schema_id: "org.cinnamon.desktop.wm.preferences" });
 
         this._signalManager = new SignalManager.SignalManager(null);
+
+        this._hoverclick_helper = new Dialogs.HoverClickHelper();
+        new PointerA11yTimeout();
 
         /* Feature toggles */
         this._toggle_keys_osd = false;
         this._toggle_keys_sound = false;
         this._events_flash = false;
         this._events_sound = false
+        this._hoverclick_enabled = false;
+        this._updatingHoverclickAction = false;
 
         /* Options */
         this.state_on_sound = null;
@@ -35,27 +53,31 @@ A11yHandler.prototype = {
         this.event_bell_sound = null;
         this.event_flash_type = null;
 
-        this.caps = Keymap.get_caps_lock_state();
-        this.num = Keymap.get_num_lock_state();
+        let seat = Clutter.get_default_backend().get_default_seat();
+        this.keymap = seat.get_keymap();
+
+        seat.connect('ptr-a11y-dwell-click-type-changed', (seat, clickType) => {
+            this._onDwellClickTypeChanged(clickType);
+        });
+
+        this.caps = this.keymap.get_caps_lock_state();
+        this.num = this.keymap.get_num_lock_state();
 
         this._signalManager.connect(this.a11y_keyboard_settings, "changed", this.on_settings_changed, this);
-        this._signalManager.connect(this.wm_settings, "changed", this.on_settings_changed, this);
+        this._signalManager.connect(this.a11y_mouse_settings, "changed", this.on_settings_changed, this);
+        this._signalManager.connect(global.settings, "changed::hoverclick-action", this.hoverkey_action_changed, this);
 
         this.on_settings_changed();
+        this.hoverkey_action_changed();
+
+        this.a11y_mouse_settings.set_boolean("dwell-click-mode-lock", false);
     },
 
     _set_keymap_listener: function(enabled) {
         if (enabled)
-            this._signalManager.connect(Keymap, "state-changed", this.on_keymap_state_changed, this);
+            this._signalManager.connect(this.keymap, "state-changed", this.on_keymap_state_changed, this);
         else
             this._signalManager.disconnect("state-changed");
-    },
-
-    _set_events_listener: function(enabled) {
-        if (enabled)
-            this._signalManager.connect(global.display, "bell", this._on_event_bell, this);
-        else
-            this._signalManager.disconnect("bell");
     },
 
     on_settings_changed: function(settings, key) {
@@ -65,28 +87,46 @@ A11yHandler.prototype = {
         this._toggle_keys_osd = this.a11y_keyboard_settings.get_boolean("togglekeys-enable-osd");
         this._toggle_keys_sound = this.a11y_keyboard_settings.get_boolean("togglekeys-enable-beep");
 
+        if (key === "dwell-click-enabled") {
+            this._hoverclick_enabled = this.a11y_mouse_settings.get_boolean("dwell-click-enabled");
+            this._hoverclick_helper.set_active(this._hoverclick_enabled);
+        }
 
         if (this._toggle_keys_sound || this._toggle_keys_osd) {
             this._set_keymap_listener(true);
         } else {
             this._set_keymap_listener(false);
         }
+    },
 
-        this._events_sound = this.wm_settings.get_boolean("audible-bell");
-        this._events_flash = this.wm_settings.get_boolean("visual-bell");
-        this.event_bell_sound = this.wm_settings.get_string("bell-sound");
-        this.event_flash_type = this.wm_settings.get_enum("visual-bell-type");
+    hoverkey_action_changed: function(settings, key) {
+        if (this._updatingHoverclickAction) {
+            return;
+        }
 
-        if (this._events_sound || this._events_flash) {
-            this._set_events_listener(true);
-        } else {
-            this._set_events_listener(false);
+        let action = global.settings.get_string("hoverclick-action");
+
+        seat = Clutter.get_default_backend().get_default_seat();
+
+        try {
+            seat.set_pointer_a11y_dwell_click_type(HOVERKEY_ACTIONS[action]);
+        } catch (e) {
+            global.logError("Attempted to use invalid action name for hoverclick")
+        }
+    },
+
+    _onDwellClickTypeChanged: function(clickType) {
+        let actionName = HOVERKEY_ACTION_NAMES[clickType];
+        if (actionName && global.settings.get_string("hoverclick-action") !== actionName) {
+            this._updatingHoverclickAction = true;
+            global.settings.set_string("hoverclick-action", actionName);
+            this._updatingHoverclickAction = false;
         }
     },
 
     on_keymap_state_changed: function(keymap) {
-        let new_caps = Keymap.get_caps_lock_state();
-        let new_num = Keymap.get_num_lock_state();
+        let new_caps = this.keymap.get_caps_lock_state();
+        let new_num = this.keymap.get_num_lock_state();
 
         if (this._toggle_keys_osd) {
             if (new_caps != this.caps) {
@@ -112,36 +152,26 @@ A11yHandler.prototype = {
         this.num = new_num;
     },
 
-    _on_event_bell: function(display, bell_window) {
-        if (this._events_sound) {
-            this.ring_bell();
-        }
-
-        if (this._events_flash) {
-            switch (this.event_flash_type) {
-                case CDesktopEnums.VisualBellType.FULLSCREEN_FLASH:
-                    this.flash_window(display, null);
-                case CDesktopEnums.VisualBellType.FRAME_FLASH:
-                    this.flash_window(display, bell_window);
-            }
-        }
-    },
-
     popup_state_osd: function(key, state) {
         let icon = null;
+        let text = null;
 
         switch (key) {
             case CAPS:
                 icon = Gio.ThemedIcon.new(state ? "cinnamon-caps-lock-symbolic" :
                                                   "cinnamon-caps-lock-off-symbolic");
+                text = state ? _("Caps Lock On"):
+                               _("Caps Lock Off");
                 break;
             case NUM:
                 icon = Gio.ThemedIcon.new(state ? "cinnamon-num-lock-symbolic" :
                                                   "cinnamon-num-lock-off-symbolic");
+                text = state ? _("Number Lock On"):
+                               _("Number Lock Off");
                 break;
         }
 
-        Main.osdWindowManager.show(-1, icon, undefined);        
+        Main.osdWindowManager.show(-1, icon, text, null);
     },
 
     play_state_sound: function(key, state) {
@@ -153,40 +183,140 @@ A11yHandler.prototype = {
                 break;
         }
     },
-
-    rect_off_screen: function(display, rect) {
-        let [sw, sh] = global.screen.get_size();
-        return (rect.x > sw && rect.y > sh);
-    },
-
-    flash_window: function(display, bell_window) {
-        if (bell_window) {
-            let rect = bell_window.get_outer_rect();
-            if (this.rect_off_screen(display, rect)) {
-                let fw = display.get_focus_window();
-                if (fw)
-                    rect = fw.get_outer_rect();
-            }
-
-            if (rect) {
-                this.fire_flash(rect);
-                return;
-            }
-        }
-
-        this.fire_flash(Main.layoutManager.focusMonitor);
-    },
-
-    fire_flash: function(rect) {
-        let flashspot = new Flashspot.Flashspot({x      : rect.x,
-                                                 y      : rect.y,
-                                                 width  : rect.width,
-                                                 height : rect.height,
-                                                 time   : .05 });
-        flashspot.fire()
-    },
-
-    ring_bell: function() {
-        Main.soundManager.playSoundFile(0, this.event_bell_sound);
-    }
 }
+
+
+/* exported PointerA11yTimeout */
+
+
+const SUCCESS_ZOOM_OUT_DURATION = 150;
+
+var PieTimer = GObject.registerClass({
+    Properties: {
+        'angle': GObject.ParamSpec.double(
+            'angle', 'angle', 'angle',
+            GObject.ParamFlags.READWRITE,
+            0, 2 * Math.PI, 0),
+    },
+}, class PieTimer extends St.DrawingArea {
+    _init() {
+        this._angle = 0;
+        super._init({
+            style_class: 'pie-timer',
+            opacity: 0,
+            important: true,
+            visible: false,
+            can_focus: false,
+            reactive: false,
+        });
+
+        this.set_pivot_point(0.5, 0.5);
+    }
+
+    get angle() {
+        return this._angle;
+    }
+
+    set angle(angle) {
+        if (this._angle == angle)
+            return;
+
+        this._angle = angle;
+        this.notify('angle');
+        this.queue_repaint();
+    }
+
+    vfunc_repaint() {
+        let node = this.get_theme_node();
+        let backgroundColor = node.get_color('-pie-background-color');
+        let borderColor = node.get_color('-pie-border-color');
+        let borderWidth = node.get_length('-pie-border-width');
+        let [width, height] = this.get_surface_size();
+        let radius = Math.min(width / 2, height / 2);
+
+        let startAngle = 3 * Math.PI / 2;
+        let endAngle = startAngle + this._angle;
+
+        let cr = this.get_context();
+        cr.setLineCap(Cairo.LineCap.ROUND);
+        cr.setLineJoin(Cairo.LineJoin.ROUND);
+        cr.translate(width / 2, height / 2);
+
+        if (this._angle < 2 * Math.PI)
+            cr.moveTo(0, 0);
+
+        cr.arc(0, 0, radius - borderWidth, startAngle, endAngle);
+
+        if (this._angle < 2 * Math.PI)
+            cr.lineTo(0, 0);
+
+        cr.closePath();
+
+        cr.setLineWidth(0);
+        Clutter.cairo_set_source_color(cr, backgroundColor);
+        cr.fillPreserve();
+
+        cr.setLineWidth(borderWidth);
+        Clutter.cairo_set_source_color(cr, borderColor);
+        cr.stroke();
+
+        cr.$dispose();
+    }
+
+    start(x, y, duration) {
+        this.x = x - this.width / 2;
+        this.y = y - this.height / 2;
+        this.show();
+
+        this.ease({
+            opacity: 255,
+            duration: duration / 4,
+            mode: Clutter.AnimationMode.EASE_IN_QUAD,
+        });
+
+        this.ease_property('angle', 2 * Math.PI, {
+            duration,
+            mode: Clutter.AnimationMode.LINEAR,
+            onComplete: this._onTransitionComplete.bind(this),
+        });
+    }
+
+    _onTransitionComplete() {
+        this.ease({
+            scale_x: 2,
+            scale_y: 2,
+            opacity: 0,
+            duration: SUCCESS_ZOOM_OUT_DURATION,
+            mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+            onStopped: () => this.destroy(),
+        });
+    }
+});
+
+var PointerA11yTimeout = class PointerA11yTimeout {
+    constructor() {
+        let seat = Clutter.get_default_backend().get_default_seat();
+
+        seat.connect('ptr-a11y-timeout-started', (o, device, type, timeout) => {
+            let [x, y] = global.get_pointer();
+
+            this._pieTimer = new PieTimer();
+            Main.uiGroup.add_actor(this._pieTimer);
+            Main.uiGroup.set_child_above_sibling(this._pieTimer, null);
+
+            this._pieTimer.start(x, y, timeout);
+
+            if (type == Clutter.PointerA11yTimeoutType.GESTURE)
+                global.display.set_cursor(Meta.Cursor.CROSSHAIR);
+        });
+
+        seat.connect('ptr-a11y-timeout-stopped', (o, device, type, clicked) => {
+            if (!clicked)
+                this._pieTimer.destroy();
+
+            if (type == Clutter.PointerA11yTimeoutType.GESTURE)
+                global.display.set_cursor(Meta.Cursor.DEFAULT);
+        });
+    }
+};
+

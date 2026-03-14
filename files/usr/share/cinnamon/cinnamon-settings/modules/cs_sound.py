@@ -3,13 +3,14 @@
 import gi
 gi.require_version('Cvc', '1.0')
 gi.require_version('Gtk', '3.0')
-from gi.repository import Gtk, Cvc, GdkPixbuf, Gio
-from SettingsWidgets import SidePage, GSettingsSoundFileChooser
+from gi.repository import Gtk, Cvc, Gdk, GdkPixbuf, Gio, Pango
+from bin.SettingsWidgets import SidePage, GSettingsSoundFileChooser
 from xapp.GSettingsWidgets import *
+from bin import util
 
 CINNAMON_SOUNDS = "org.cinnamon.sounds"
 CINNAMON_DESKTOP_SOUNDS = "org.cinnamon.desktop.sound"
-MAXIMUM_VOLUME_KEY = "maximum-volume"
+OVERAMPLIFICATION_KEY = "allow-amplified-volume"
 
 DECAY_STEP = .15
 
@@ -53,7 +54,7 @@ class SoundBox(Gtk.Box):
         self.set_spacing(5)
 
         label = Gtk.Label()
-        label.set_markup("<b>%s</b>" % title)
+        label.set_markup(f"<b>{title}</b>")
         label.set_xalign(0.0)
         self.add(label)
 
@@ -90,12 +91,12 @@ class Slider(SettingsWidget):
         self.set_spacing(5)
         self.set_margin_bottom(5)
 
-        if sizeGroup == None:
+        if sizeGroup is None:
             sizeGroup = Gtk.SizeGroup.new(Gtk.SizeGroupMode.HORIZONTAL)
 
-        if step == None:
+        if step is None:
             step = (maxValue - minValue) / 100
-        if page == None:
+        if page is None:
             page = (maxValue - minValue) / 10
         self.adjustment = Gtk.Adjustment.new(value, minValue, maxValue, step, page, 0)
 
@@ -108,10 +109,10 @@ class Slider(SettingsWidget):
 
         # add label and icon (if specified)
         labelBox = Gtk.Box(spacing=5)
-        if gicon != None:
+        if gicon is not None:
             appIcon = Gtk.Image.new_from_gicon(gicon, 2)
             labelBox.pack_start(appIcon, False, False, 0)
-        elif iconName != None:
+        elif iconName is not None:
             appIcon = Gtk.Image.new_from_icon_name(iconName, 2)
             labelBox.pack_start(appIcon, False, False, 0)
         self.label = Gtk.Label(title)
@@ -133,8 +134,8 @@ class Slider(SettingsWidget):
         max_label.set_alignment(0.0, 0.75)
         min_label.set_margin_right(6)
         max_label.set_margin_left(6)
-        min_label.set_markup("<i><small>%s</small></i>" % minLabel)
-        max_label.set_markup("<i><small>%s</small></i>" % maxLabel)
+        min_label.set_markup(f"<i><small>{minLabel}</small></i>")
+        max_label.set_markup(f"<i><small>{maxLabel}</small></i>")
         sizeGroup.add_widget(min_label)
         sizeGroup.add_widget(max_label)
 
@@ -168,7 +169,7 @@ class VolumeBar(Slider):
         self.set_margin_right(23)
         self.slider.set_sensitive(False)
 
-        self.muteImage = Gtk.Image.new_from_icon_name("audio-volume-muted-symbolic", 1)
+        self.muteImage = Gtk.Image.new_from_icon_name("xsi-audio-volume-muted-symbolic", 1)
         self.muteSwitch = Gtk.ToggleButton()
         self.muteSwitch.set_image(self.muteImage)
         self.muteSwitch.set_relief(Gtk.ReliefStyle.NONE)
@@ -254,29 +255,29 @@ class VolumeBar(Slider):
         self.muteSwitch.handler_unblock(self.muteSwitchHandlerId)
 
         if self.isMuted:
-            self.muteImage.set_from_icon_name("audio-volume-muted-symbolic", 1)
+            self.muteImage.set_from_icon_name("xsi-audio-volume-muted-symbolic", 1)
             self.label.set_label(self.baseTitle + _("Muted"))
             self.muteSwitch.set_tooltip_text(_("Click to unmute"))
         else:
-            self.muteImage.set_from_icon_name("audio-volume-high-symbolic", 1)
+            self.muteImage.set_from_icon_name("xsi-audio-volume-high-symbolic", 1)
             self.label.set_label(self.baseTitle + str(self.volume) + "%")
             self.muteSwitch.set_tooltip_text(_("Click to mute"))
 
 class BalanceBar(Slider):
-    def __init__(self, type, minVal = -1, norm = 1, sizeGroup=None):
-        self.type = type
+    def __init__(self, settingType, minVal = -1, norm = 1, sizeGroup=None):
+        self.type = settingType
         self.norm = norm
         self.value = 0
 
-        if type == "balance":
+        if settingType == "balance":
             title = _("Balance")
             minLabel = _("Left")
             maxLabel = _("Right")
-        elif type == "fade":
+        elif settingType == "fade":
             title = _("Fade")
             minLabel = _("Rear")
             maxLabel = _("Front")
-        elif type == "lfe":
+        elif settingType == "lfe":
             title = _("Subwoofer")
             minLabel = _("Soft")
             maxLabel = _("Loud")
@@ -341,7 +342,7 @@ class VolumeLevelBar(SettingsWidget):
         self.levelBar.set_min_value(0)
 
     def setStream(self, stream):
-        if self.stream != None:
+        if self.stream is not None:
             self.stream.remove_monitor()
             self.stream.disconnect(self.monitorId)
         self.stream = stream
@@ -389,7 +390,7 @@ class ProfileSelector(SettingsWidget):
 
     def onProfileSelect(self, a):
         newProfile = self.combo.get_active_id()
-        if newProfile != self.profile and newProfile != None:
+        if newProfile != self.profile and newProfile is not None:
             self.profile = newProfile
             self.controller.change_profile_on_selected_device(self.device, newProfile)
 
@@ -469,19 +470,9 @@ class SoundTest(Gtk.Dialog):
             sound = "audio-channel-"+position[1]
 
         try:
-            connection = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-
-            connection.call_sync("org.cinnamon.SettingsDaemon.Sound",
-                                 "/org/cinnamon/SettingsDaemon/Sound",
-                                 "org.cinnamon.SettingsDaemon.Sound",
-                                 "PlaySoundWithChannel",
-                                 GLib.Variant("(uss)", (0, sound, position[1])),
-                                 None,
-                                 Gio.DBusCallFlags.NONE,
-                                 2000,
-                                 None)
+            util.play_sound_name(sound, position[1])
         except GLib.Error as e:
-            print("Could not play test sound: %s" % e.message)
+            print(f"Could not play test sound: {e.message}")
 
     def setPositionHideState(self):
         map = self.stream.get_channel_map()
@@ -546,9 +537,10 @@ class Module:
 
         sizeGroup = Gtk.SizeGroup.new(Gtk.SizeGroupMode.HORIZONTAL)
 
-        # ouput volume
-        max_volume = self.sound_settings.get_int(MAXIMUM_VOLUME_KEY)
-        self.outVolume = VolumeBar(self.controller.get_vol_max_norm(), max_volume, sizeGroup=sizeGroup)
+        self.scale = self.sidePage.stack.get_scale_factor()
+
+        # output volume
+        self.outVolume = VolumeBar(self.controller.get_vol_max_norm(), 100, sizeGroup=sizeGroup)
         devSettings.add_row(self.outVolume)
 
         # balance
@@ -558,6 +550,11 @@ class Module:
         devSettings.add_row(self.fade)
         self.woofer = BalanceBar("lfe", 0, self.controller.get_vol_max_norm(), sizeGroup=sizeGroup)
         devSettings.add_row(self.woofer)
+
+        # overamplification
+        switch = GSettingsSwitch(_("Overamplification"), CINNAMON_DESKTOP_SOUNDS, OVERAMPLIFICATION_KEY)
+        switch.set_tooltip_text(_("Allow the volume to exceed 100%, with reduced sound quality."))
+        devSettings.add_row(switch)
 
         ## Input page
         page = SettingsPage()
@@ -578,7 +575,7 @@ class Module:
         sizeGroup = Gtk.SizeGroup.new(Gtk.SizeGroupMode.HORIZONTAL)
 
         # input volume
-        self.inVolume = VolumeBar(self.controller.get_vol_max_norm(), max_volume, sizeGroup=sizeGroup)
+        self.inVolume = VolumeBar(self.controller.get_vol_max_norm(), 100, sizeGroup=sizeGroup)
         devSettings.add_row(self.inVolume)
 
         # input level
@@ -588,7 +585,7 @@ class Module:
 
         noInputsMessage = Gtk.Box()
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        image = Gtk.Image.new_from_icon_name("action-unavailable-symbolic", Gtk.IconSize.DIALOG)
+        image = Gtk.Image.new_from_icon_name("xsi-sign-forbidden-symbolic", Gtk.IconSize.DIALOG)
         image.set_pixel_size(96)
         box.pack_start(image, False, False, 0)
         box.set_valign(Gtk.Align.CENTER)
@@ -626,7 +623,7 @@ class Module:
 
         noAppsMessage = Gtk.Box()
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        image = Gtk.Image.new_from_icon_name("action-unavailable-symbolic", Gtk.IconSize.DIALOG)
+        image = Gtk.Image.new_from_icon_name("xsi-sign-forbidden-symbolic", Gtk.IconSize.DIALOG)
         image.set_pixel_size(96)
         box.pack_start(image, False, False, 0)
         box.set_valign(Gtk.Align.CENTER)
@@ -635,24 +632,17 @@ class Module:
         noAppsMessage.pack_start(box, True, True, 0)
         self.appStack.add_named(noAppsMessage, "noAppsMessage")
 
-        ## Settings page
-        page = SettingsPage()
-        self.sidePage.stack.add_titled(page, "settings", _("Settings"))
+        self.sound_settings.connect(f"changed::{OVERAMPLIFICATION_KEY}", self.onOverAmplificationChanged)
+        self.onOverAmplificationChanged()
 
-        amplificationSection = page.add_section(_("Amplification"))
-        self.maxVolume = Slider(_("Maximum volume: %d") % max_volume + "%", _("Reduced"), _("Amplified"), 1, 150, None, step=1, page=10, value=max_volume, gicon=None, iconName=None)
-        self.maxVolume.adjustment.connect("value-changed", self.onMaxVolumeChanged)
-        self.maxVolume.setMark(100)
-        amplificationSection.add_row(self.maxVolume)
-
-    def onMaxVolumeChanged(self, adjustment):
-        newValue = int(round(adjustment.get_value()))
-        self.sound_settings.set_int(MAXIMUM_VOLUME_KEY, newValue)
-        self.maxVolume.label.set_label(_("Maximum volume: %d") % newValue + "%")
-        self.outVolume.adjustment.set_upper(newValue)
+    def onOverAmplificationChanged(self, settings=None, key=None):
+        overamplification = self.sound_settings.get_boolean(OVERAMPLIFICATION_KEY)
         self.outVolume.slider.clear_marks()
-        if (newValue > 100):
+        if overamplification:
+            self.outVolume.adjustment.set_upper(150)
             self.outVolume.setMark(100)
+        else:
+            self.outVolume.adjustment.set_upper(100)
 
     def inializeController(self):
         self.controller = Cvc.MixerControl(name = "cinnamon")
@@ -669,58 +659,80 @@ class Module:
         self.controller.connect("stream-removed", self.streamRemoved)
         self.controller.open()
 
-    def buildDeviceSelect(self, type, model):
+    def data_func_surface(self, column, cell, model, iter_, *args):
+        pixbuf = model.get_value(iter_, 4)
+        surface = Gdk.cairo_surface_create_from_pixbuf(pixbuf, self.scale)
+        cell.set_property("surface", surface)
+
+    def buildDeviceSelect(self, direction, model):
         select = Gtk.IconView.new_with_model(model)
         select.set_margin(0)
-        select.set_pixbuf_column(4)
-        select.set_text_column(0)
         select.set_column_spacing(0)
 
-        select.connect("selection-changed", self.setActiveDevice, type)
+        # pixbuf
+        ren = Gtk.CellRendererPixbuf()
+        select.pack_start(ren, False)
+        select.set_cell_data_func(ren, self.data_func_surface)
 
+        # text
+        ren = Gtk.CellRendererText()
+        select.pack_start(ren, False)
+        select.add_attribute(ren, "text", 0)
+        ren.set_property("wrap-mode", Pango.WrapMode.WORD)
+        ren.set_property("wrap-width", 120)
+        ren.set_property("alignment", Pango.Alignment.CENTER)
+        ren.set_property("xalign", 0.5)
+        
+        select.connect("selection-changed", self.setActiveDevice, direction)
+        
         return select
 
-    def setActiveDevice(self, view, type):
+    def setActiveDevice(self, view, direction):
         selected = view.get_selected_items()
         if len(selected) == 0:
             return
 
         model = view.get_model()
         newDeviceId = model.get_value(model.get_iter(selected[0]), 3)
-        newDevice = getattr(self.controller, "lookup_"+type+"_id")(newDeviceId)
-        if newDevice != None and newDeviceId != getattr(self, type+"Id"):
-            getattr(self.controller, "change_"+type)(newDevice)
+        newDevice = getattr(self.controller, "lookup_"+direction+"_id")(newDeviceId)
+        if newDevice is not None and newDeviceId != getattr(self, direction+"Id"):
+            getattr(self.controller, "change_"+direction)(newDevice)
             self.profile.setDevice(newDevice)
 
-    def deviceAdded(self, c, id, type):
-        device = getattr(self.controller, "lookup_"+type+"_id")(id)
+    def deviceAdded(self, c, deviceId, direction):
+        device = getattr(self.controller, "lookup_"+direction+"_id")(deviceId)
+
+        icon_size = 32 * self.scale
 
         iconTheme = Gtk.IconTheme.get_default()
         gicon = device.get_gicon()
         iconName = device.get_icon_name()
         icon = None
         if gicon is not None:
-            lookup = iconTheme.lookup_by_gicon(gicon, 32, 0)
+            lookup = iconTheme.lookup_by_gicon(gicon, icon_size, 0)
             if lookup is not None:
                 icon = lookup.load_icon()
 
         if icon is None:
-            if (iconName is not None and "bluetooth" in iconName):
-                icon = iconTheme.load_icon("bluetooth", 32, 0)
+            if iconName is not None and "bluetooth" in iconName:
+                icon = iconTheme.load_icon("bluetooth", icon_size, 0)
+            elif iconTheme.has_icon("audio-card"):
+                # The audio-card icon was removed from adwaita, so may be absent in the current theme
+                icon = iconTheme.load_icon("audio-card", icon_size, 0)
             else:
-                icon = iconTheme.load_icon("audio-card", 32, 0)
+                icon = iconTheme.load_icon("sound", icon_size, 0)
 
-        getattr(self, type+"DeviceList").append([device.get_description() + "\n" +  device.get_origin(), "", False, id, icon])
+        getattr(self, direction+"DeviceList").append([device.get_description() + "\n" +  device.get_origin(), "", False, deviceId, icon])
 
-        if type == "input":
+        if direction == "input":
             self.checkInputState()
 
-    def deviceRemoved(self, c, id, type):
-        store = getattr(self, type+"DeviceList")
+    def deviceRemoved(self, c, deviceId, direction):
+        store = getattr(self, direction+"DeviceList")
         for row in store:
-            if row[3] == id:
+            if row[3] == deviceId:
                 store.remove(row.iter)
-                if type == "input":
+                if direction == "input":
                     self.checkInputState()
                 return
 
@@ -730,41 +742,41 @@ class Module:
         else:
             self.inputStack.set_visible_child_name("inputBox")
 
-    def activeOutputUpdate(self, c, id):
-        self.outputId = id
-        device = self.controller.lookup_output_id(id)
+    def activeOutputUpdate(self, c, deviceId):
+        self.outputId = deviceId
+        device = self.controller.lookup_output_id(deviceId)
 
         self.profile.setDevice(device)
 
         # select current device in device selector
         i = 0
         for row in self.outputDeviceList:
-            if row[3] == id:
+            if row[3] == deviceId:
                 self.outputSelector.select_path(Gtk.TreePath.new_from_string(str(i)))
             i = i + 1
 
         self.setChannelMap()
 
-    def activeInputUpdate(self, c, id):
-        self.inputId = id
+    def activeInputUpdate(self, c, deviceId):
+        self.inputId = deviceId
 
         # select current device in device selector
         i = 0
         for row in self.inputDeviceList:
-            if row[3] == id:
+            if row[3] == deviceId:
                 self.inputSelector.select_path(Gtk.TreePath.new_from_string(str(i)))
             i = i + 1
 
-    def defaultSinkChanged(self, c, id):
+    def defaultSinkChanged(self, c, deviceId):
         defaultSink = self.controller.get_default_sink()
-        if defaultSink == None:
+        if defaultSink is None:
             return
         self.outVolume.setStream(defaultSink)
         self.setChannelMap()
 
-    def defaultSourceChanged(self, c, id):
+    def defaultSourceChanged(self, c, deviceId):
         defaultSource = self.controller.get_default_source()
-        if defaultSource == None:
+        if defaultSource is None:
             return
         self.inVolume.setStream(defaultSource)
         self.inLevel.setStream(defaultSource)
@@ -776,34 +788,40 @@ class Module:
             self.fade.setChannelMap(channelMap)
             self.woofer.setChannelMap(channelMap)
 
-    def streamAdded(self, c, id):
-        stream = self.controller.lookup_stream_id(id)
+    def streamAdded(self, c, deviceId):
+        stream = self.controller.lookup_stream_id(deviceId)
 
         if stream in self.controller.get_sink_inputs():
             name = stream.props.name
 
             # FIXME: We use to filter out by PA_PROP_APPLICATION_ID.  But
             # most streams report this as null now... why??
-            if name in ("speech-dispatcher", "libcanberra"):
-                # speech-dispatcher: orca/speechd/spd-say
-                # libcanberra: cinnamon effects, test sounds
+            if name in ("cinnamon-settings.py",
+                        "speech-dispatcher",
+                        "speech-dispatcher-dummy",
+                        "libcanberra",
+                        "Muffin"):
+                # cinnamon-settings.py: test sounds
+                # speech-dispatcher[-dummy]: orca/speechd/spd-say
+                # libcanberra: cinnamon effects, test sounds - don't think this is needed any more?
+                # Muffin: window effects, some other cinnamon effects.
                 return
 
-            if id in self.appList.keys():
+            if deviceId in self.appList.keys():
                 # Don't add an input more than once
                 return
 
-            if name == None:
+            if name is None:
                 name = _("Unknown")
 
-            label = "%s: " % name
+            label = f"{name}: "
 
-            self.appList[id] = VolumeBar(self.controller.get_vol_max_norm(),
+            self.appList[deviceId] = VolumeBar(self.controller.get_vol_max_norm(),
                                          100,
                                          label,
                                          stream.get_gicon())
-            self.appList[id].setStream(stream)
-            self.appSettings.add_row(self.appList[id])
+            self.appList[deviceId].setStream(stream)
+            self.appSettings.add_row(self.appList[deviceId])
             self.appSettings.list_box.invalidate_headers()
             self.appSettings.show_all()
         elif stream == self.controller.get_event_sink_input():
@@ -811,11 +829,11 @@ class Module:
 
         self.checkAppState()
 
-    def streamRemoved(self, c, id):
-        if id in self.appList:
-            self.appList[id].get_parent().destroy()
+    def streamRemoved(self, c, deviceId):
+        if deviceId in self.appList:
+            self.appList[deviceId].get_parent().destroy()
             self.appSettings.list_box.invalidate_headers()
-            del self.appList[id]
+            del self.appList[deviceId]
             self.checkAppState()
 
     def checkAppState(self):

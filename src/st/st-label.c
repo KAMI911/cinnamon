@@ -40,6 +40,7 @@
 
 #include <clutter/clutter.h>
 
+#include "st-debug.h"
 #include "st-label.h"
 #include "st-private.h"
 #include "st-widget.h"
@@ -188,13 +189,13 @@ st_label_dispose (GObject   *object)
 }
 
 static void
-st_label_paint (ClutterActor *actor)
+st_label_paint (ClutterActor *actor, ClutterPaintContext *paint_context)
 {
   StLabelPrivate *priv = ST_LABEL (actor)->priv;
   StThemeNode *theme_node = st_widget_get_theme_node (ST_WIDGET (actor));
   StShadow *shadow_spec = st_theme_node_get_text_shadow (theme_node);
 
-  st_widget_paint_background (ST_WIDGET (actor));
+  st_widget_paint_background (ST_WIDGET (actor), paint_context);
 
   if (shadow_spec)
     {
@@ -218,7 +219,7 @@ st_label_paint (ClutterActor *actor)
 
       if (priv->text_shadow_pipeline != NULL)
         {
-          CoglFramebuffer *fb = cogl_get_draw_framebuffer();
+          CoglFramebuffer *fb = clutter_paint_context_get_framebuffer (paint_context);
           _st_paint_shadow_with_opacity (shadow_spec,
                                          priv->text_shadow_pipeline,
                                          fb,
@@ -227,7 +228,7 @@ st_label_paint (ClutterActor *actor)
         }
     }
 
-  clutter_actor_paint (priv->label);
+  clutter_actor_paint (priv->label, paint_context);
 }
 
 static void
@@ -330,6 +331,7 @@ st_label_get_text (StLabel *label)
   if (ctext == NULL) {
     g_printerr ("Cinnamon WARNING: Possible orphan label being accessed via st_label_get_text().  Check your timers and handlers!\n"
                 "Address: %p\n", (void *) label);
+    st_dump_js_stack ();
     priv->orphan = TRUE;
     return NULL;
   }
@@ -352,7 +354,6 @@ st_label_set_text (StLabel     *label,
   ClutterText *ctext;
 
   g_return_if_fail (ST_IS_LABEL (label));
-  g_return_if_fail (text != NULL);
 
   priv = label->priv;
   ctext = CLUTTER_TEXT (priv->label);
@@ -387,12 +388,12 @@ st_label_set_text (StLabel     *label,
  * Returns: (transfer none): ethe #ClutterText used by #StLabel. The label
  * is owned by the #StLabel and should not be unref'ed by the application.
  */
-ClutterActor*
+ClutterText *
 st_label_get_clutter_text (StLabel *label)
 {
   g_return_val_if_fail (ST_IS_LABEL (label), NULL);
 
-  return label->priv->label;
+  return (ClutterText *) label->priv->label;
 }
 
 
