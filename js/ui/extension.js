@@ -882,8 +882,21 @@ function reloadExtension(uuid, type) {
     loadExtension(uuid, type);
 }
 
+// uuid is an xlet's directory name and can come from untrusted sources (a
+// spices package's metadata.json, a DBus enable-xlet call, ...). It's used
+// below to build a filesystem path, so anything containing a path separator
+// or otherwise not a bare name is rejected before path construction to
+// prevent escaping userDir/systemDataDirs.
+const VALID_UUID_RE = /^[A-Za-z0-9][A-Za-z0-9_.@-]*$/;
+
 function findExtensionDirectory(uuid, userDir, folder) {
     let dir, dirPath;
+
+    if (!VALID_UUID_RE.test(uuid) || uuid.includes('..')) {
+        global.logWarning(`Refusing to load extension with unsafe uuid: ${uuid}`);
+        return null;
+    }
+
     if (!GLib.getenv('CINNAMON_TROUBLESHOOT')) {
         dirPath = `${userDir}/${uuid}`;
         dir = Gio.file_new_for_path(dirPath);
