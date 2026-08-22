@@ -442,6 +442,7 @@ query_info_async_ready_cb (GObject *source,
       return;
     }
 
+  g_object_unref (info);
   deep_count_start (self);
 }
 
