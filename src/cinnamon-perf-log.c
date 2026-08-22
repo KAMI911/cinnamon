@@ -853,7 +853,11 @@ cinnamon_perf_log_dump_events (CinnamonPerfLog   *perf_log,
 
   g_string_append (output, " ]");
 
-  return write_string (out, g_string_free (output, FALSE), error);
+  char *buffer = g_string_free (output, FALSE);
+  gboolean success = write_string (out, buffer, error);
+  g_free (buffer);
+
+  return success;
 }
 
 typedef struct {
