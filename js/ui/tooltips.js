@@ -267,7 +267,7 @@ Tooltip.prototype = {
     set_text: function(text) {
         this._tooltip.set_text(text);
         this._tooltip.clutter_text.set_use_markup(false);
-        this._tooltip.clutter_text.allocate_preferred_size(Clutter.AllocationFlags.NONE);
+        this._tooltip.clutter_text.allocate_preferred_size();
         // we need to trigger a reallocation to make the tooltip the right size, but this can lead to the text getting
         // off-center in some situations, so also trigger a relayout.
         this._tooltip.queue_relayout();
@@ -282,7 +282,7 @@ Tooltip.prototype = {
     set_markup: function(markup) {
         this._tooltip.set_text(markup);
         this._tooltip.clutter_text.set_use_markup(true);
-        this._tooltip.clutter_text.allocate_preferred_size(Clutter.AllocationFlags.NONE);
+        this._tooltip.clutter_text.allocate_preferred_size();
         // we need to trigger a reallocation to make the tooltip the right size, but this can lead to the text getting
         // off-center in some situations, so also trigger a relayout.
         this._tooltip.queue_relayout();
@@ -331,10 +331,9 @@ PanelItemTooltip.prototype = {
         this._panelItem = panelItem;
         this.orientation = orientation;
         if (this._panelItem instanceof Applet.Applet) {
-            this._panelItem.connect("orientation-changed", Lang.bind(this, this._onOrientationChanged));
+            this.signals.connect(this._panelItem, "orientation-changed", this._onOrientationChanged, this);
         } else if (this._panelItem._applet) {
-            this._panelItem._applet.connect("orientation-changed",
-                Lang.bind(this, this._onOrientationChanged));
+            this.signals.connect(this._panelItem._applet, "orientation-changed", this._onOrientationChanged, this);
         }
     },
 
@@ -356,22 +355,22 @@ PanelItemTooltip.prototype = {
         switch (this.orientation) {
             case St.Side.BOTTOM:
                 panel = Main.panelManager.getPanel(monitor.index, PanelLoc.bottom);
-                tooltipTop = monitor.y + monitor.height - tooltipHeight - panel.actor.height;
-                tooltipLeft = this.mousePosition[0] - Math.round(tooltipWidth / 2);
+                tooltipTop = monitor.y + monitor.height - tooltipHeight - panel.get_height();
+                tooltipLeft = this.mousePosition[0] - tooltipWidth / 2;
                 tooltipLeft = Math.max(tooltipLeft, monitor.x);
                 tooltipLeft = Math.min(tooltipLeft, monitor.x + monitor.width - tooltipWidth);
                 break;
             case St.Side.TOP:
                 panel = Main.panelManager.getPanel(monitor.index, PanelLoc.top);
-                tooltipTop =  monitor.y + panel.actor.height;
-                tooltipLeft = this.mousePosition[0] - Math.round(tooltipWidth / 2);
+                tooltipTop =  monitor.y + panel.get_height();
+                tooltipLeft = this.mousePosition[0] - tooltipWidth / 2;
                 tooltipLeft = Math.max(tooltipLeft, monitor.x);
                 tooltipLeft = Math.min(tooltipLeft, monitor.x + monitor.width - tooltipWidth);
                 break;
             case St.Side.LEFT:
                 panel = Main.panelManager.getPanel(monitor.index, PanelLoc.left);
                 tooltipTop = this._panelItem.actor.get_transformed_position()[1];
-                tooltipTop += Math.round((this._panelItem.actor.height - tooltipHeight) / 2);
+                tooltipTop += (this._panelItem.actor.height - tooltipHeight) / 2;
 
                 // Fix for the tooltip clipping outside the screen when it's very close to the top or bottom.
                 if (tooltipTop < monitor.y) {
@@ -381,12 +380,12 @@ PanelItemTooltip.prototype = {
                     tooltipTop = monitor.y + monitor.height - tooltipHeight;
                 }
 
-                tooltipLeft = monitor.x + panel.actor.width;
+                tooltipLeft = monitor.x + panel.get_width();
                 break;
             case St.Side.RIGHT:
                 panel = Main.panelManager.getPanel(monitor.index, PanelLoc.right);
                 tooltipTop = this._panelItem.actor.get_transformed_position()[1];
-                tooltipTop += Math.round((this._panelItem.actor.height - tooltipHeight) / 2);
+                tooltipTop += (this._panelItem.actor.height - tooltipHeight) / 2;
 
                 // Fix for the tooltip clipping outside the screen when it's very close to the top or bottom.
                 if (tooltipTop < monitor.y) {
@@ -396,7 +395,7 @@ PanelItemTooltip.prototype = {
                     tooltipTop = monitor.y + monitor.height - tooltipHeight;
                 }
 
-                tooltipLeft = monitor.x + monitor.width - tooltipWidth - panel.actor.width;
+                tooltipLeft = monitor.x + monitor.width - tooltipWidth - panel.get_width();
                 break;
             default:
                 break;
