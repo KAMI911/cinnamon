@@ -494,6 +494,19 @@ st_theme_context_get_root_node (StThemeContext *context)
  *
  * Return value: (transfer none): a node with the same properties as @node
  */
+/* Soft cap on the number of interned StThemeNodes kept alive purely for
+ * sharing purposes. Without a bound, any UI pattern that creates transient
+ * widgets with unique inline styles (dynamic colors/positions used by
+ * notifications, progress indicators, badges, etc.) accumulates entries
+ * here for the life of the StThemeContext, since the only eviction path is
+ * a full st_theme_context_changed() flush on theme/font/resolution
+ * changes. This is a cache, not an ownership list: every caller of
+ * st_theme_context_intern_node() takes its own reference on the returned
+ * node (see st_widget.c), so dropping this table's reference to a node
+ * still in active use elsewhere never frees it early - it only loses
+ * sharing for that one node. */
+#define MAX_INTERNED_THEME_NODES 1000
+
 StThemeNode *
 st_theme_context_intern_node (StThemeContext *context,
                               StThemeNode    *node)
@@ -503,6 +516,15 @@ st_theme_context_intern_node (StThemeContext *context,
   /* this might be node or not - it doesn't actually matter */
   if (mine != NULL)
     return mine;
+
+  if (g_hash_table_size (context->nodes) >= MAX_INTERNED_THEME_NODES)
+    {
+      GHashTableIter iter;
+
+      g_hash_table_iter_init (&iter, context->nodes);
+      if (g_hash_table_iter_next (&iter, NULL, NULL))
+        g_hash_table_iter_remove (&iter);
+    }
 
   g_hash_table_add (context->nodes, g_object_ref (node));
   return node;
