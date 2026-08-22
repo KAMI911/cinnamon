@@ -34,6 +34,18 @@ const ALIASES_KEY = 'run-dialog-aliases';
 
 const MAX_COMPLETIONS = 40;
 
+// completeCommand() synchronously enumerates every candidate directory
+// (including, for a bare command name, every directory in $PATH) on every
+// call, which is driven off a short debounce timer while the completion
+// box is visible - typing can repeatedly enumerate large directories like
+// /usr/bin synchronously on the compositor thread. Cache each directory's
+// listing for a few seconds so a burst of keystrokes within one path
+// segment reuses the same enumeration instead of re-reading the directory
+// on every keystroke.
+const COMPLETION_DIR_CACHE_TTL_MS = 3000;
+const COMPLETION_DIR_CACHE_MAX_ENTRIES = 100;
+let _completionDirCache = new Map();
+
 const NAVIGATE_TYPE_NONE = 0;
 const NAVIGATE_TYPE_TAB = 1;
 const NAVIGATE_TYPE_ARROW = 2;
@@ -104,26 +116,45 @@ function completeCommand(text) {
 
     let results = [];
     paths.forEach(function(path) {
-        try {
-            let file = Gio.File.new_for_path(path);
-            let fileEnum = file.enumerate_children('standard::name,standard::type', Gio.FileQueryInfoFlags.NONE, null);
-            let info;
+        let cached = _completionDirCache.get(path);
+        let now = GLib.get_monotonic_time() / 1000;
+        let entries;
 
-            while ((info = fileEnum.next_file(null))) {
-                let name = last_path + info.get_name();
-                // Escape strings
-                name = name.replace(/ /g, "\\ ")
+        if (cached && (now - cached.timestamp) < COMPLETION_DIR_CACHE_TTL_MS) {
+            entries = cached.entries;
+        } else {
+            entries = [];
+            try {
+                let file = Gio.File.new_for_path(path);
+                let fileEnum = file.enumerate_children('standard::name,standard::type', Gio.FileQueryInfoFlags.NONE, null);
+                let info;
 
-                if (info.get_file_type() == Gio.FileType.DIRECTORY)
-                    name += "/";
-                else
-                    name += " ";
-
-                if (name.slice(0, last.length) == last)
-                    results.push(name);
+                while ((info = fileEnum.next_file(null))) {
+                    entries.push({
+                        name: info.get_name(),
+                        isDirectory: info.get_file_type() == Gio.FileType.DIRECTORY,
+                    });
+                }
+            } catch (e) {
             }
-        } catch (e) {
+            if (_completionDirCache.size >= COMPLETION_DIR_CACHE_MAX_ENTRIES)
+                _completionDirCache.delete(_completionDirCache.keys().next().value);
+            _completionDirCache.set(path, { entries, timestamp: now });
         }
+
+        entries.forEach(entry => {
+            let name = last_path + entry.name;
+            // Escape strings
+            name = name.replace(/ /g, "\\ ")
+
+            if (entry.isDirectory)
+                name += "/";
+            else
+                name += " ";
+
+            if (name.slice(0, last.length) == last)
+                results.push(name);
+        });
     });
 
     if (results.length == 0) return ["", []];
