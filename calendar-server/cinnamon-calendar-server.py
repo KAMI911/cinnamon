@@ -243,8 +243,15 @@ class CalendarServer(Gio.Application):
         return relevant
 
     def handle_set_time_range(self, iface, inv, time_since, time_until, force_reload):
-        print("SET TIME: from %s to %s" % (GLib.DateTime.new_from_unix_local(time_since).format_iso8601(),
-                            GLib.DateTime.new_from_unix_local(time_until).format_iso8601()))
+        since_dt = GLib.DateTime.new_from_unix_local(time_since)
+        until_dt = GLib.DateTime.new_from_unix_local(time_until)
+
+        if since_dt is None or until_dt is None or time_since > time_until:
+            inv.return_dbus_error("org.freedesktop.DBus.Error.InvalidArgs",
+                                   "Invalid time range: %d - %d" % (time_since, time_until))
+            return True
+
+        print("SET TIME: from %s to %s" % (since_dt.format_iso8601(), until_dt.format_iso8601()))
 
         self.hold()
         self.release()
