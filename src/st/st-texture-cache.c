@@ -1992,7 +1992,14 @@ st_texture_cache_load_file_sync_to_cogl_texture (StTextureCache *cache,
       g_object_unref (pixbuf);
 
       if (!image)
-        goto out;
+        {
+          /* e.g. the image's dimensions exceed what Cogl/GL can upload as a
+           * texture. Callers unconditionally read (*error)->message on a
+           * NULL return, so this must never leave *error unset. */
+          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                      "Failed to create texture from pixbuf");
+          goto out;
+        }
 
       if (policy == ST_TEXTURE_CACHE_POLICY_FOREVER)
         {
@@ -2089,7 +2096,7 @@ st_texture_cache_load_gfile_to_cogl_texture (StTextureCache *cache,
   if (texture == NULL)
     {
       char *uri = g_file_get_uri (file);
-      g_warning ("Failed to load %s: %s", uri, error->message);
+      g_warning ("Failed to load %s: %s", uri, error ? error->message : "unknown error");
       g_clear_error (&error);
       g_free (uri);
     }
@@ -2152,7 +2159,7 @@ st_texture_cache_load_gfile_to_cairo_surface (StTextureCache *cache,
   if (surface == NULL)
     {
       char *uri = g_file_get_uri (file);
-      g_warning ("Failed to load %s: %s", uri, error->message);
+      g_warning ("Failed to load %s: %s", uri, error ? error->message : "unknown error");
       g_clear_error (&error);
       g_free (uri);
     }
