@@ -2114,9 +2114,28 @@ var Panel = GObject.registerClass({
             return;
 
         this._focusWindow = global.display.focus_window;
-        this._signalManager.connect(this._focusWindow, "position-changed", this._updatePanelVisibility, this);
-        this._signalManager.connect(this._focusWindow, "size-changed", this._updatePanelVisibility, this);
+        this._signalManager.connect(this._focusWindow, "position-changed", this._queueUpdatePanelVisibility, this);
+        this._signalManager.connect(this._focusWindow, "size-changed", this._queueUpdatePanelVisibility, this);
         this._updatePanelVisibility();
+    }
+
+    /**
+     * _queueUpdatePanelVisibility:
+     *
+     * position-changed/size-changed fire continuously (once per frame) while
+     * the focused window is being interactively dragged or resized, and
+     * _updatePanelVisibility() does a synchronous sync_hover()/get_pointer()
+     * on every call. Coalesce bursts of these into a single deferred update
+     * per main loop iteration instead of doing that work on every signal.
+     */
+    _queueUpdatePanelVisibility() {
+        if (this._updatePanelVisibilityId)
+            return;
+
+        this._updatePanelVisibilityId = Mainloop.idle_add(() => {
+            this._updatePanelVisibilityId = 0;
+            this._updatePanelVisibility();
+        });
     }
 
     _processPanelAutoHide() {
