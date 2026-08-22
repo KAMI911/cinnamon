@@ -432,6 +432,9 @@ var WindowManager = class WindowManager {
 
             if (!metaWindow.minimized) {
                 this._seenWindows.add(metaWindow);
+                metaWindow.connect("unmanaging", () => {
+                    this._seenWindows.delete(metaWindow);
+                });
                 return;
             }
 
