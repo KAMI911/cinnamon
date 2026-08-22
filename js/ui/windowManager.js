@@ -432,6 +432,9 @@ var WindowManager = class WindowManager {
 
             if (!metaWindow.minimized) {
                 this._seenWindows.add(metaWindow);
+                metaWindow.connect("unmanaging", () => {
+                    this._seenWindows.delete(metaWindow);
+                });
                 return;
             }
 
@@ -598,6 +601,8 @@ var WindowManager = class WindowManager {
     _minimizeWindowDone(cinnamonwm, actor) {
         if (this._minimizing.delete(actor)) {
             actor.remove_all_transitions()
+            let rect = actor.meta_window.get_buffer_rect();
+            actor.set_position(rect.x, rect.y);
             actor.set_pivot_point(0, 0);
             actor.set_scale(1.0, 1.0);
             actor.set_opacity(255);
