@@ -331,10 +331,9 @@ PanelItemTooltip.prototype = {
         this._panelItem = panelItem;
         this.orientation = orientation;
         if (this._panelItem instanceof Applet.Applet) {
-            this._panelItem.connect("orientation-changed", Lang.bind(this, this._onOrientationChanged));
+            this.signals.connect(this._panelItem, "orientation-changed", this._onOrientationChanged, this);
         } else if (this._panelItem._applet) {
-            this._panelItem._applet.connect("orientation-changed",
-                Lang.bind(this, this._onOrientationChanged));
+            this.signals.connect(this._panelItem._applet, "orientation-changed", this._onOrientationChanged, this);
         }
     },
 
