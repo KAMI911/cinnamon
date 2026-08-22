@@ -509,11 +509,22 @@ NotificationDaemon.prototype = {
 
         notification.clearButtons();
 
+        // clearButtons() only destroys the button actors, not a direct
+        // 'clicked' listener connected below - disconnect any handler from
+        // a previous call before possibly reconnecting one, or updating a
+        // notification with a 'default' action repeatedly (e.g. a
+        // progress/download notification) accumulates one extra listener
+        // per update and fires the action that many times per click.
+        if (ndata._defaultActionClickedId) {
+            notification.disconnect(ndata._defaultActionClickedId);
+            ndata._defaultActionClickedId = 0;
+        }
+
         if (actions.length) {
             notification.setUseActionIcons(hints.maybeGet('action-icons') == true);
             for (let i = 0; i < actions.length - 1; i += 2) {
                 if (actions[i] == 'default')
-                    notification.connect('clicked', Lang.bind(this,
+                    ndata._defaultActionClickedId = notification.connect('clicked', Lang.bind(this,
                         function() {
                             this._emitActionInvoked(ndata.id, "default");
                         }));
