@@ -1078,10 +1078,17 @@ MessageTray.prototype = {
     _hideNotification: function () {
         let y = Main.layoutManager.primaryMonitor.y;
 
+        // Disconnect based on whether a handler is actually connected
+        // (tracked by the id itself), not on the current value of
+        // this.bottomPosition - if the "bottom-notifications" setting
+        // changes between _showNotification() and here, checking the
+        // live setting would skip the disconnect and leak the handler.
+        if (this.bottomPositionSignal) {
+            this._notificationBin.disconnect(this.bottomPositionSignal);
+            this.bottomPositionSignal = 0;
+        }
+
         if (this.bottomPosition) {
-            if (this.bottomPositionSignal) {
-                this._notificationBin.disconnect(this.bottomPositionSignal);
-            }
             y += Main.layoutManager.primaryMonitor.height - this._notificationBin.height;
         }
 
