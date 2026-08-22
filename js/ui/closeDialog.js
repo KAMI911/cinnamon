@@ -29,6 +29,7 @@ var CloseDialog = GObject.registerClass({
         this._timeoutId = 0;
         this._windowFocusChangedId = 0;
         this._keyFocusChangedId = 0;
+        this._scaleChangedId = 0;
     }
 
     get window() {
@@ -93,7 +94,8 @@ var CloseDialog = GObject.registerClass({
         global.focus_manager.add_group(this._dialog);
 
         let themeContext = St.ThemeContext.get_for_stage(global.stage);
-        themeContext.connect('notify::scale-factor', this._updateScale.bind(this));
+        this._scaleChangedId =
+            themeContext.connect('notify::scale-factor', this._updateScale.bind(this));
 
         this._updateScale();
     }
@@ -202,6 +204,11 @@ var CloseDialog = GObject.registerClass({
 
         global.stage.disconnect(this._keyFocusChangedId);
         this._keyFocusChangedId = 0;
+
+        if (this._scaleChangedId) {
+            St.ThemeContext.get_for_stage(global.stage).disconnect(this._scaleChangedId);
+            this._scaleChangedId = 0;
+        }
 
         this._dialog._dialog.remove_all_transitions();
 
