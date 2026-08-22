@@ -643,7 +643,10 @@ var Applet = class Applet {
     }
 
     openAbout() {
-        Util.spawnCommandLine("xlet-about-dialog applets " + this._uuid);
+        // argv array, not a command-line string: this._uuid is a directory
+        // name that isn't validated against shell metacharacters, so it
+        // must never be concatenated into a string that gets re-parsed.
+        Util.spawn(["xlet-about-dialog", "applets", this._uuid]);
     }
 
     configureApplet(tab=0) {
@@ -652,7 +655,7 @@ var Applet = class Applet {
             tab = 0;
         }
 
-        Util.spawnCommandLine("xlet-settings applet " + this._uuid + " -i " + this.instance_id + " -t " + tab);
+        Util.spawn(["xlet-settings", "applet", String(this._uuid), "-i", String(this.instance_id), "-t", String(tab)]);
     }
 
     get _panelHeight() {
