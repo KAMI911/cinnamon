@@ -567,12 +567,31 @@ grab_window_screenshot (ClutterActor *stage,
         zero_corner_semitransparent_pixels (screenshot_data->image);
     }
 
-  if (screenshot_data->include_cursor)
-    _draw_cursor_image (screenshot_data->image, screenshot_data->screenshot_area);
-
   g_signal_handlers_disconnect_by_func (stage, (void *)grab_window_screenshot, (gpointer) screenshot_data);
 
   meta_enable_unredirect_for_display (display);
+
+  if (screenshot_data->image == NULL)
+    {
+      /* meta_shaped_texture_get_image()/the shadow framebuffer path can
+       * legitimately fail (window not yet painted, texture upload failure,
+       * ...). Bail out here instead of falling through to
+       * _draw_cursor_image()/write_screenshot_thread(), which both
+       * dereference screenshot_data->image unconditionally and would crash
+       * the whole process on a NULL cairo_surface_t. */
+      g_warning ("cinnamon-screenshot: failed to capture window image, aborting screenshot");
+
+      if (screenshot_data->callback)
+        screenshot_data->callback (screenshot_data->screenshot, FALSE, &screenshot_data->screenshot_area);
+
+      g_object_unref (screenshot_data->screenshot);
+      g_free (screenshot_data->filename);
+      g_free (screenshot_data);
+      return;
+    }
+
+  if (screenshot_data->include_cursor)
+    _draw_cursor_image (screenshot_data->image, screenshot_data->screenshot_area);
 
   result = g_simple_async_result_new (NULL, on_screenshot_written, (gpointer)screenshot_data, cinnamon_screenshot_screenshot_window);
   g_simple_async_result_run_in_thread (result, write_screenshot_thread, G_PRIORITY_DEFAULT, NULL);
