@@ -859,58 +859,71 @@ function switchToGreeter() {
 }
 
 function _doSwitchToGreeter() {
-    if (_processIsRunning('gdm')) {
-        // Old GDM
-        try {
-            spawn(['gdmflexiserver', '--startnew', 'Standard']);
-            return GLib.SOURCE_REMOVE;
-        } catch (e) {
-            global.logError('Error calling gdmflexiserver: ' + e.message);
+    // The gdm/gdm3/DBus fallback chain below used to check each display
+    // manager with a blocking GLib.spawn_command_line_sync('pidof ...'),
+    // which blocks the compositor's main loop until the child process
+    // exits. Do the same 'is it running' checks asynchronously instead,
+    // chaining the fallbacks through callbacks; this function still only
+    // runs once (from a GLib.idle_add), it just no longer blocks while
+    // finding out which display manager to talk to.
+    _processIsRunningAsync('gdm', (gdmRunning) => {
+        if (gdmRunning) {
+            // Old GDM
+            try {
+                spawn(['gdmflexiserver', '--startnew', 'Standard']);
+                return;
+            } catch (e) {
+                global.logError('Error calling gdmflexiserver: ' + e.message);
+            }
         }
-    }
 
-    if (_processIsRunning('gdm3')) {
-        // Newer GDM
-        try {
-            spawn(['gdmflexiserver']);
-            return GLib.SOURCE_REMOVE;
-        } catch (e) {
-            global.logError('Error calling gdmflexiserver: ' + e.message);
-        }
-    }
+        _processIsRunningAsync('gdm3', (gdm3Running) => {
+            if (gdm3Running) {
+                // Newer GDM
+                try {
+                    spawn(['gdmflexiserver']);
+                    return;
+                } catch (e) {
+                    global.logError('Error calling gdmflexiserver: ' + e.message);
+                }
+            }
 
-    // Try freedesktop.org standard DBus method (works with most modern display managers)
-    let seat_path = GLib.getenv('XDG_SEAT_PATH');
-    if (seat_path) {
-        try {
-            let bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, null);
-            bus.call_sync(
-                'org.freedesktop.DisplayManager',
-                seat_path,
-                'org.freedesktop.DisplayManager.Seat',
-                'SwitchToGreeter',
-                null,
-                null,
-                Gio.DBusCallFlags.NONE,
-                -1,
-                null
-            );
-            return GLib.SOURCE_REMOVE;
-        } catch (e) {
-            global.logError('Error calling SwitchToGreeter: ' + e.message);
-        }
-    }
+            // Try freedesktop.org standard DBus method (works with most modern display managers)
+            let seat_path = GLib.getenv('XDG_SEAT_PATH');
+            if (seat_path) {
+                try {
+                    let bus = Gio.bus_get_sync(Gio.BusType.SYSTEM, null);
+                    bus.call_sync(
+                        'org.freedesktop.DisplayManager',
+                        seat_path,
+                        'org.freedesktop.DisplayManager.Seat',
+                        'SwitchToGreeter',
+                        null,
+                        null,
+                        Gio.DBusCallFlags.NONE,
+                        -1,
+                        null
+                    );
+                    return;
+                } catch (e) {
+                    global.logError('Error calling SwitchToGreeter: ' + e.message);
+                }
+            }
 
-    global.logWarning('switchToGreeter: No supported display manager method available');
+            global.logWarning('switchToGreeter: No supported display manager method available');
+        });
+    });
+
     return GLib.SOURCE_REMOVE;
 }
 
-function _processIsRunning(name) {
+function _processIsRunningAsync(name, callback) {
     try {
-        let [success, stdout] = GLib.spawn_command_line_sync('pidof ' + name);
-        return success && stdout.length > 0;
+        spawnAsyncIO(['pidof', name], (stdout, stderr, exitCode) => {
+            callback(exitCode === 0);
+        });
     } catch (e) {
-        return false;
+        callback(false);
     }
 }
 
