@@ -147,6 +147,14 @@ var CinnamonDBus = class {
      *
      */
     Eval(code) {
+        // Eval() runs arbitrary JS with full shell privileges. It's a
+        // developer/Looking-Glass tool, not general API surface, so it's
+        // gated behind the same setting that unlocks the other Alt-F2
+        // developer commands (see runDialog.js DEVEL_COMMANDS) rather than
+        // being reachable by anything that can talk to org.Cinnamon.
+        if (!global.settings.get_boolean('development-tools'))
+            return [false, JSON.stringify('Developer tools are disabled (org.cinnamon development-tools).')];
+
         let returnValue;
         let success;
         try {
@@ -283,10 +291,14 @@ var CinnamonDBus = class {
     }
 
     induceSegfault() {
+        if (!global.settings.get_boolean('development-tools'))
+            return;
         global.segfault();
     }
 
     leakMemory(mb) {
+        if (!global.settings.get_boolean('development-tools'))
+            return;
         global.alloc_leak(mb);
     }
 
