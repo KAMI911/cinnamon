@@ -1536,7 +1536,15 @@ st_texture_cache_load_file_async (StTextureCache *cache,
   int scale;
 
   scale = ceilf (paint_scale * resource_scale);
-  key = g_strdup_printf (CACHE_PREFIX_FILE "%u%d", g_file_hash (file), scale);
+  /* available_width/available_height are part of the key (not just the file
+   * hash and scale): ensure_request() merges any caller with a matching key
+   * into the same outstanding request and hands every one of them the same
+   * loaded image, sized for whichever caller's width/height created the
+   * request. Two concurrent callers requesting the same file at different
+   * target sizes would otherwise get merged and the second one handed an
+   * image sized for the first. */
+  key = g_strdup_printf (CACHE_PREFIX_FILE "%u%d_%dx%d", g_file_hash (file),
+                        scale, available_width, available_height);
 
   policy = ST_TEXTURE_CACHE_POLICY_NONE; /* XXX */
 
