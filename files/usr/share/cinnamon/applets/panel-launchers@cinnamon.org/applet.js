@@ -364,8 +364,8 @@ class LaunchersBox {
         let vertical = this.applet.orientation == St.Side.LEFT || this.applet.orientation == St.Side.RIGHT;
         this._dragPlaceholder = new DND.GenericDragPlaceholderItem();
         let placeholderSize = vertical ? [1, this.applet.icon_size * global.ui_scale] : [this.applet.icon_size * global.ui_scale, 1];
-        this._dragPlaceholder.child.set_size(...placeholderSize);
-        this.actor.insert_child_at_index(this._dragPlaceholder.actor, index);
+        this._dragPlaceholder.set_size(...placeholderSize);
+        this.actor.insert_child_at_index(this._dragPlaceholder, index);
 
         if (!skipAnimation) {
             this._dragAnimating = true;
@@ -381,7 +381,7 @@ class LaunchersBox {
 
         if (this._dragPlaceholder) {
             if (skipAnimation) {
-                this._dragPlaceholder.actor.destroy();
+                this._dragPlaceholder.destroy();
             } else {
                 this._dragAnimating = true;
                 this._dragPlaceholder.animateOutAndDestroy(() => this._dragAnimating = false);
@@ -434,7 +434,7 @@ class LaunchersBox {
                     // animates in a new placeholder
                     this._createDragPlaceholder(dropIndex);
                 } else {
-                    this.actor.set_child_at_index(this._dragPlaceholder.actor, dropIndex);
+                    this.actor.set_child_at_index(this._dragPlaceholder, dropIndex);
                 }
                 this._dragTargetIndex = dropIndex;
             }
@@ -591,16 +591,16 @@ class CinnamonPanelLaunchersApplet extends Applet.Applet {
     }
 
     _loadLauncher(path) {
-        let appSys = Cinnamon.AppSystem.get_default();
-        let app = appSys.lookup_app(path);
-        let appinfo = null;
-        if (!app) {
-            appinfo = CMenu.DesktopAppInfo.new_from_filename(CUSTOM_LAUNCHERS_PATH + path);
-            // Fallback to old launcher folder
-            if (!appinfo) {
-                appinfo = CMenu.DesktopAppInfo.new_from_filename(OLD_CUSTOM_LAUNCHERS_PATH + path);
-            }
-            if (!appinfo) {
+        let appinfo = CMenu.DesktopAppInfo.new_from_filename(CUSTOM_LAUNCHERS_PATH + path);
+        // Fallback to old launcher folder
+        if (!appinfo) {
+            appinfo = CMenu.DesktopAppInfo.new_from_filename(OLD_CUSTOM_LAUNCHERS_PATH + path);
+        }
+
+        let app = null;
+        if (!appinfo) {
+            app = Cinnamon.AppSystem.get_default().lookup_app(path);
+            if (!app) {
                 global.logWarning(`Failed to add launcher from path: ${path}`);
                 return null;
             }
