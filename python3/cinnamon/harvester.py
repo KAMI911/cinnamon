@@ -95,6 +95,14 @@ TIMEOUT_DOWNLOAD_JSON = 15
 TIMEOUT_DOWNLOAD_THUMB = 60
 TIMEOUT_DOWNLOAD_ZIP = 120
 
+# Upper bound on the total uncompressed size of a spice zip archive, checked
+# against ZipInfo.file_size (from the archive's own central directory, so
+# this is cheap to check before extracting anything) to guard against a
+# decompression-bomb style malformed or malicious archive exhausting disk
+# space. Spice packages are small JS/theme assets; 200MB is far more than
+# any legitimate one needs.
+MAX_SPICE_ZIP_UNCOMPRESSED_SIZE = 200 * 1024 * 1024
+
 
 def remove_empty_folders(path):
     if not os.path.isdir(path):
@@ -596,6 +604,13 @@ class Harvester:
                 self._download_zip(paths.zip_download_url, tmp, progress_callback)
 
             with zipfile.ZipFile(tmp_name) as _zip:
+                total_size = sum(member.file_size for member in _zip.infolist())
+                if total_size > MAX_SPICE_ZIP_UNCOMPRESSED_SIZE:
+                    raise ValueError(
+                        f"Refusing to extract {uuid}: uncompressed size "
+                        f"{total_size} exceeds the {MAX_SPICE_ZIP_UNCOMPRESSED_SIZE} byte limit"
+                    )
+
                 with tempfile.TemporaryDirectory() as d:
                     for member in _zip.infolist():
                         _zip.extract(member, d)
