@@ -218,7 +218,11 @@ st_theme_load_stylesheet (StTheme    *theme,
     return FALSE;
 
   insert_stylesheet (theme, path, stylesheet);
-  cr_stylesheet_ref (stylesheet);
+  /* insert_stylesheet() takes its own reference for stylesheets_by_filename;
+   * the reference already held by `stylesheet` (from parse_stylesheet_nofail()
+   * above) becomes the one owned by custom_stylesheets below - no extra ref
+   * here, or it's never balanced by a matching unref (see
+   * st_theme_unload_stylesheet() and st_theme_finalize()). */
   theme->custom_stylesheets = g_slist_prepend (theme->custom_stylesheets, stylesheet);
   g_signal_emit (theme, signals[STYLESHEETS_CHANGED], 0);
 
@@ -299,6 +303,12 @@ st_theme_finalize (GObject * object)
 
   g_hash_table_destroy (theme->stylesheets_by_filename);
   g_hash_table_destroy (theme->filenames_by_stylesheet);
+
+  /* insert_stylesheet() (called from the constructor) took its own,
+   * separate reference for stylesheets_by_filename, already released by
+   * g_hash_table_destroy() above; the original reference returned by
+   * parse_stylesheet_nofail() into this field was never released. */
+  g_clear_pointer (&theme->fallback_cr_stylesheet, cr_stylesheet_unref);
 
   g_free (theme->fallback_stylesheet);
 
