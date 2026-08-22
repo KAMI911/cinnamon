@@ -95,6 +95,12 @@ TIMEOUT_DOWNLOAD_JSON = 15
 TIMEOUT_DOWNLOAD_THUMB = 60
 TIMEOUT_DOWNLOAD_ZIP = 120
 
+# Upper bound on the spice index JSON response, checked while streaming it
+# in (before json.loads() ever sees it) so a compromised/misbehaving server
+# response can't be used to exhaust memory. The real index is a small JSON
+# list of spices; 20MB is far more than any legitimate one needs.
+MAX_INDEX_JSON_SIZE = 20 * 1024 * 1024
+
 
 def remove_empty_folders(path):
     if not os.path.isdir(path):
@@ -357,9 +363,20 @@ class Harvester:
         try:
             r = requests.get(url,
                              timeout=TIMEOUT_DOWNLOAD_JSON,
-                             params={"time": get_current_timestamp()})
+                             params={"time": get_current_timestamp()},
+                             stream=True)
             debug(f"Downloading from {r.request.url}")
             r.raise_for_status()
+
+            raw = bytearray()
+            for chunk in r.iter_content(chunk_size=65536):
+                raw.extend(chunk)
+                if len(raw) > MAX_INDEX_JSON_SIZE:
+                    raise ValueError(
+                        f"{self.spice_type} index response exceeds the "
+                        f"{MAX_INDEX_JSON_SIZE} byte limit"
+                    )
+            text = raw.decode("utf-8")
         except Exception as e:
             warn(f"Could not refresh json data for {self.spice_type}: {e}")
             raise
@@ -367,13 +384,13 @@ class Harvester:
         # Validate before overwriting the on-disk cache so a malformed
         # response doesn't clobber the previously-good index.
         try:
-            new_cache = json.loads(r.text)
+            new_cache = json.loads(text)
         except ValueError as e:
             warn(f"Server returned malformed JSON for {self.spice_type}: {e}")
             raise
 
         with open(self.index_file, "w", encoding="utf-8") as f:
-            f.write(r.text)
+            f.write(text)
 
         # Snapshot the prior index so _download_thumb can tell whether the
         # server-side last_edited moved for each uuid.
