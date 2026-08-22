@@ -586,5 +586,21 @@ cinnamon_mime_sniffer_sniff_finish (CinnamonMimeSniffer *self,
                                  GAsyncResult *res,
                                  GError **error)
 {
-  return g_task_propagate_pointer (self->priv->task, error);
+  gchar **result;
+
+  result = g_task_propagate_pointer (self->priv->task, error);
+
+  /* self->priv->task and the task's own internal reference on `self` (its
+   * source object) form a 2-object reference cycle that GObject's
+   * refcounting can never break by itself: self holds a reference on the
+   * task via priv->task, and the task holds a reference back on self.
+   * self's dispose()/finalize() would then never run, leaking the sniffer,
+   * its task, and everything both hold, on every single sniff. The task's
+   * result was just propagated above and its GAsyncReadyCallback has
+   * already been invoked (sniff_finish() is only ever called from within
+   * it), so nothing needs priv->task anymore - clearing it here breaks
+   * the cycle. */
+  g_clear_object (&self->priv->task);
+
+  return result;
 }
