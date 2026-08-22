@@ -502,8 +502,15 @@ lock_initialization (int     *argc,
 static void
 response_lock_init_failed (void)
 {
-    /* if we fail to lock then we should drop the dialog */
-    send_success ();
+    /* Locking/PAM setup failed (e.g. hack_uid() refusing to run as root, or
+     * cs_auth_init() failing to open a PAM session) *before* any password
+     * was ever checked. Previously this reported CS_PAM_AUTH_SUCCESS here,
+     * which is a fail-open bypass: anything that can make initialization
+     * fail (a misconfigured PAM stack, resource exhaustion, this binary
+     * ever being run as root/setuid) gets an unauthenticated unlock. Report
+     * failure instead - never claim an authentication success we never
+     * performed. */
+    send_cancelled ();
 }
 
 static gboolean
