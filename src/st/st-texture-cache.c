@@ -595,7 +595,8 @@ pixbuf_to_st_content_image (GdkPixbuf *pixbuf,
 }
 
 static cairo_surface_t *
-pixbuf_to_cairo_surface (GdkPixbuf *pixbuf)
+pixbuf_to_cairo_surface (GdkPixbuf *pixbuf,
+                         float      resource_scale)
 {
   cairo_surface_t *dummy_surface;
   cairo_pattern_t *pattern;
@@ -609,6 +610,7 @@ pixbuf_to_cairo_surface (GdkPixbuf *pixbuf)
   pattern = cairo_get_source (cr);
   cairo_pattern_get_surface (pattern, &surface);
   cairo_surface_reference (surface);
+  cairo_surface_set_device_scale (surface, resource_scale, resource_scale);
   cairo_destroy (cr);
   cairo_surface_destroy (dummy_surface);
 
@@ -1030,6 +1032,9 @@ st_texture_cache_load_gicon_with_scale (StTextureCache    *cache,
   else
     lookup_flags |= GTK_ICON_LOOKUP_DIR_LTR;
 
+  if (resource_scale <= 0.0)
+    resource_scale = 1.0;
+
   scale = ceilf (paint_scale * resource_scale);
   info = gtk_icon_theme_lookup_by_gicon_for_scale (theme, icon,
                                                    size, scale,
@@ -1157,7 +1162,7 @@ st_texture_cache_load_from_pixbuf (GdkPixbuf *pixbuf,
                         "request-mode", CLUTTER_REQUEST_CONTENT_SIZE,
                         NULL);
 
-  clutter_actor_get_resource_scale (actor, &resource_scale);
+  resource_scale = clutter_actor_get_resource_scale (actor);
 
   image = pixbuf_to_st_content_image (pixbuf,
                                       size, size,
@@ -1835,11 +1840,13 @@ symbolic_name_for_icon (const char *name)
  * Return Value: (transfer none): A new #ClutterTexture for the icon
  */
 ClutterActor *
-st_texture_cache_load_icon_name (StTextureCache    *cache,
-                                 StThemeNode       *theme_node,
-                                 const char        *name,
-                                 StIconType         icon_type,
-                                 gint               size)
+st_texture_cache_load_icon_name_with_scale (StTextureCache    *cache,
+                                            StThemeNode       *theme_node,
+                                            const char        *name,
+                                            StIconType         icon_type,
+                                            gint               size,
+                                            gint               paint_scale,
+                                            gfloat             resource_scale)
 {
   ClutterActor *texture;
   GIcon *themed;
@@ -1851,24 +1858,28 @@ st_texture_cache_load_icon_name (StTextureCache    *cache,
     {
     case ST_ICON_APPLICATION:
       themed = g_themed_icon_new (name);
-      texture = st_texture_cache_load_gicon (cache, theme_node, themed, size);
+      texture = st_texture_cache_load_gicon_with_scale (cache, theme_node, themed, size,
+                                                        paint_scale, resource_scale);
       g_object_unref (themed);
       if (texture == NULL)
         {
           themed = g_themed_icon_new ("application-x-executable");
-          texture = st_texture_cache_load_gicon (cache, theme_node, themed, size);
+          texture = st_texture_cache_load_gicon_with_scale (cache, theme_node, themed, size,
+                                                            paint_scale, resource_scale);
           g_object_unref (themed);
         }
       return CLUTTER_ACTOR (texture);
       break;
     case ST_ICON_DOCUMENT:
       themed = g_themed_icon_new (name);
-      texture = st_texture_cache_load_gicon (cache, theme_node, themed, size);
+      texture = st_texture_cache_load_gicon_with_scale (cache, theme_node, themed, size,
+                                                        paint_scale, resource_scale);
       g_object_unref (themed);
       if (texture == NULL)
         {
           themed = g_themed_icon_new ("x-office-document");
-          texture = st_texture_cache_load_gicon (cache, theme_node, themed, size);
+          texture = st_texture_cache_load_gicon_with_scale (cache, theme_node, themed, size,
+                                                            paint_scale, resource_scale);
           g_object_unref (themed);
         }
 
@@ -1878,19 +1889,22 @@ st_texture_cache_load_icon_name (StTextureCache    *cache,
       symbolic_name = symbolic_name_for_icon (name);
       themed = g_themed_icon_new (symbolic_name);
       g_free (symbolic_name);
-      texture = st_texture_cache_load_gicon (cache, theme_node, themed, size);
+      texture = st_texture_cache_load_gicon_with_scale (cache, theme_node, themed, size,
+                                                        paint_scale, resource_scale);
       g_object_unref (themed);
 
       return CLUTTER_ACTOR (texture);
       break;
     case ST_ICON_FULLCOLOR:
       themed = g_themed_icon_new (name);
-      texture = st_texture_cache_load_gicon (cache, theme_node, themed, size);
+      texture = st_texture_cache_load_gicon_with_scale (cache, theme_node, themed, size,
+                                                        paint_scale, resource_scale);
       g_object_unref (themed);
       if (texture == NULL)
         {
           themed = g_themed_icon_new ("image-missing");
-          texture = st_texture_cache_load_gicon (cache, theme_node, themed, size);
+          texture = st_texture_cache_load_gicon_with_scale (cache, theme_node, themed, size,
+                                                            paint_scale, resource_scale);
           g_object_unref (themed);
         }
 
@@ -1899,6 +1913,19 @@ st_texture_cache_load_icon_name (StTextureCache    *cache,
     default:
       g_assert_not_reached ();
     }
+}
+
+ClutterActor *
+st_texture_cache_load_icon_name (StTextureCache    *cache,
+                                 StThemeNode       *theme_node,
+                                 const char        *name,
+                                 StIconType         icon_type,
+                                 gint               size)
+{
+  return st_texture_cache_load_icon_name_with_scale (cache, theme_node, name,
+                                                    icon_type, size,
+                                                    st_theme_context_get_scale_for_stage (),
+                                                    1.0);
 }
 
 /**
@@ -1965,7 +1992,14 @@ st_texture_cache_load_file_sync_to_cogl_texture (StTextureCache *cache,
       g_object_unref (pixbuf);
 
       if (!image)
-        goto out;
+        {
+          /* e.g. the image's dimensions exceed what Cogl/GL can upload as a
+           * texture. Callers unconditionally read (*error)->message on a
+           * NULL return, so this must never leave *error unset. */
+          g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                      "Failed to create texture from pixbuf");
+          goto out;
+        }
 
       if (policy == ST_TEXTURE_CACHE_POLICY_FOREVER)
         {
@@ -2012,7 +2046,7 @@ st_texture_cache_load_file_sync_to_cairo_surface (StTextureCache        *cache,
       if (!pixbuf)
         goto out;
 
-      surface = pixbuf_to_cairo_surface (pixbuf);
+      surface = pixbuf_to_cairo_surface (pixbuf, resource_scale);
       g_object_unref (pixbuf);
 
       if (policy == ST_TEXTURE_CACHE_POLICY_FOREVER)
@@ -2062,7 +2096,7 @@ st_texture_cache_load_gfile_to_cogl_texture (StTextureCache *cache,
   if (texture == NULL)
     {
       char *uri = g_file_get_uri (file);
-      g_warning ("Failed to load %s: %s", uri, error->message);
+      g_warning ("Failed to load %s: %s", uri, error ? error->message : "unknown error");
       g_clear_error (&error);
       g_free (uri);
     }
@@ -2125,7 +2159,7 @@ st_texture_cache_load_gfile_to_cairo_surface (StTextureCache *cache,
   if (surface == NULL)
     {
       char *uri = g_file_get_uri (file);
-      g_warning ("Failed to load %s: %s", uri, error->message);
+      g_warning ("Failed to load %s: %s", uri, error ? error->message : "unknown error");
       g_clear_error (&error);
       g_free (uri);
     }
