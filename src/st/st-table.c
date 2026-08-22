@@ -561,6 +561,7 @@ st_table_preferred_allocate (ClutterActor          *self,
   gint row_spacing, col_spacing;
   gint i;
   gint *col_widths, *row_heights;
+  gint *col_offsets, *row_offsets;
   StTable *table;
   StTablePrivate *priv;
   gboolean ltr;
@@ -580,6 +581,20 @@ st_table_preferred_allocate (ClutterActor          *self,
     st_table_calculate_row_heights (table,
                                     (int) (content_box->y2 - content_box->y1),
                                     col_widths);
+
+  /* Cumulative offsets, computed once up front, so each child's x/y below
+   * is an O(1) lookup instead of re-summing col_widths[0..col-1] /
+   * row_heights[0..row-1] for every child - O(children * columns) work
+   * over the whole table otherwise. */
+  col_offsets = g_new (gint, priv->n_cols + 1);
+  col_offsets[0] = 0;
+  for (i = 0; i < priv->n_cols; i++)
+    col_offsets[i + 1] = col_offsets[i] + col_widths[i];
+
+  row_offsets = g_new (gint, priv->n_rows + 1);
+  row_offsets[0] = 0;
+  for (i = 0; i < priv->n_rows; i++)
+    row_offsets[i + 1] = row_offsets[i] + row_heights[i];
 
   ltr = (st_widget_get_direction (ST_WIDGET (self)) == ST_TEXT_DIRECTION_LTR);
 
@@ -649,23 +664,20 @@ st_table_preferred_allocate (ClutterActor          *self,
       if (ltr)
         {
           child_x = (int) content_box->x1
-                    + col_spacing * col;
-          for (i = 0; i < col; i++)
-            child_x += col_widths[i];
+                    + col_spacing * col
+                    + col_offsets[col];
         }
       else
         {
           child_x = (int) content_box->x2
-                    - col_spacing * col;
-          for (i = 0; i < col; i++)
-            child_x -= col_widths[i];
+                    - col_spacing * col
+                    - col_offsets[col];
         }
 
       /* calculate child y */
       child_y = (int) content_box->y1
-                + row_spacing * row;
-      for (i = 0; i < row; i++)
-        child_y += row_heights[i];
+                + row_spacing * row
+                + row_offsets[row];
 
       /* set up childbox */
       if (ltr)
@@ -686,6 +698,9 @@ st_table_preferred_allocate (ClutterActor          *self,
                                          x_align_f, y_align_f,
                                          meta->x_fill, meta->y_fill);
     }
+
+  g_free (col_offsets);
+  g_free (row_offsets);
 }
 
 static void
