@@ -1439,6 +1439,10 @@ st_texture_cache_load_sliced_image_file (StTextureCache *cache,
   GCancellable *cancellable = g_cancellable_new ();
 
   g_return_val_if_fail (G_IS_FILE (file), NULL);
+  /* load_sliced_image()'s loops increment by grid_width/grid_height * scale;
+   * a value of 0 here would make them spin forever on the worker thread. */
+  g_return_val_if_fail (grid_width > 0, NULL);
+  g_return_val_if_fail (grid_height > 0, NULL);
   g_assert (paint_scale > 0);
   g_assert (resource_scale > 0);
 
