@@ -12,6 +12,11 @@ try:
 except AttributeError:
     logfile = f'{os.path.expanduser("~")}/.cinnamon/harvester.log'
 
+# harvester.log otherwise grows for the life of the installation. Rotate the
+# previous contents out to a single backup once this cap is exceeded, rather
+# than appending forever.
+MAX_LOG_SIZE = 5 * 1024 * 1024
+
 
 class ActivityLogger:
     def __init__(self):
@@ -28,5 +33,10 @@ class ActivityLogger:
             os.makedirs(directory)
         while True:
             entry = self.queue.get()
+            try:
+                if os.path.getsize(logfile) >= MAX_LOG_SIZE:
+                    os.replace(logfile, f"{logfile}.1")
+            except OSError:
+                pass
             with open(logfile, "a", encoding='utf-8') as f:
                 f.write(f"{entry}\n")
