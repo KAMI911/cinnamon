@@ -66,6 +66,16 @@ static guint manager_signals[LAST_SIGNAL];
 #define SYSTEM_TRAY_BEGIN_MESSAGE   1
 #define SYSTEM_TRAY_CANCEL_MESSAGE  2
 
+/* SYSTEM_TRAY_BEGIN_MESSAGE carries an attacker-controlled length (any local
+ * X client can send this ClientMessage to our window) that is used directly
+ * as a g_malloc() size. Balloon-style tray messages are always short text,
+ * so a generous but bounded cap here turns a trivial single-message
+ * OOM/abort DoS into a silently-ignored malformed request. We also cap how
+ * many BEGIN_MESSAGEs can be queued at once (never completed by a matching
+ * payload) so that can't be used to exhaust memory either. */
+#define NA_TRAY_MAX_MESSAGE_LEN     (64 * 1024)
+#define NA_TRAY_MAX_PENDING_MESSAGES 32
+
 #define SYSTEM_TRAY_ORIENTATION_HORZ 0
 #define SYSTEM_TRAY_ORIENTATION_VERT 1
 
@@ -402,6 +412,18 @@ na_tray_manager_handle_begin_message (NaTrayManager       *manager,
     {
       g_signal_emit (manager, manager_signals[MESSAGE_SENT], 0,
                      socket, "", id, timeout);
+    }
+  else if (len < 0 || len > NA_TRAY_MAX_MESSAGE_LEN)
+    {
+      /* Refuse to honor an unreasonable or malformed length instead of
+       * passing it straight to g_malloc(). */
+      return;
+    }
+  else if (g_list_length (manager->messages) >= NA_TRAY_MAX_PENDING_MESSAGES)
+    {
+      /* Too many incomplete messages already queued; drop this request
+       * rather than let an unbounded number of BEGIN_MESSAGEs accumulate. */
+      return;
     }
   else
     {
