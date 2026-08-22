@@ -564,6 +564,10 @@ cs_event_grabber_grab_offscreen (CsEventGrabber *grab,
         return res;
 }
 
+/* Matches the retry count cs_event_grabber_grab_window() already uses for
+ * its own bounded grab retry loops. */
+#define MOVE_TO_WINDOW_MAX_RETRIES 4
+
 /* This is similar to cs_event_grabber_grab_window but doesn't fail */
 void
 cs_event_grabber_move_to_window (CsEventGrabber    *grab,
@@ -572,20 +576,41 @@ cs_event_grabber_move_to_window (CsEventGrabber    *grab,
                         gboolean   hide_cursor)
 {
         gboolean result = FALSE;
+        int      i;
 
         g_return_if_fail (CS_IS_EVENT_GRABBER (grab));
 
         xorg_lock_smasher_set_active (grab, FALSE);
 
-        do {
+        /* cs_event_grabber_move_keyboard()/move_mouse() each already retry
+         * once internally (with a blocking sleep(1) in between) before
+         * giving up. Without a cap here, a persistently failing grab (e.g.
+         * a contended X server, common right after the primary screensaver
+         * has crashed and this fail-safe locker takes over) would spin
+         * this loop indefinitely instead of degrading gracefully. */
+        for (i = 0; i < MOVE_TO_WINDOW_MAX_RETRIES; i++) {
                 result = cs_event_grabber_move_keyboard (grab, window, screen);
                 gdk_flush ();
-        } while (!result);
+                if (result) {
+                        break;
+                }
+        }
+        if (!result) {
+                g_debug ("Giving up on moving the keyboard grab after %d attempts",
+                          MOVE_TO_WINDOW_MAX_RETRIES);
+        }
 
-        do {
+        for (i = 0; i < MOVE_TO_WINDOW_MAX_RETRIES; i++) {
                 result = cs_event_grabber_move_mouse (grab, window, screen, hide_cursor);
                 gdk_flush ();
-        } while (!result);
+                if (result) {
+                        break;
+                }
+        }
+        if (!result) {
+                g_debug ("Giving up on moving the mouse grab after %d attempts",
+                          MOVE_TO_WINDOW_MAX_RETRIES);
+        }
 }
 
 static void
