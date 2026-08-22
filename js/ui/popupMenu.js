@@ -287,7 +287,13 @@ var PopupBaseMenuItem = class PopupBaseMenuItem {
     }
 
     setColumnWidths(widths) {
+        if (this._columnWidths &&
+            this._columnWidths.length === widths.length &&
+            this._columnWidths.every((width, i) => width === widths[i]))
+            return;
+
         this._columnWidths = widths;
+        this.actor.queue_relayout();
     }
 
     _getPreferredWidth(actor, forHeight, alloc) {
@@ -336,7 +342,7 @@ var PopupBaseMenuItem = class PopupBaseMenuItem {
         alloc.min_size = alloc.natural_size = height;
     }
 
-    _allocate(actor, box, flags) {
+    _allocate(actor, box) {
         let height = box.y2 - box.y1;
         let direction = this.actor.get_direction();
 
@@ -357,7 +363,7 @@ var PopupBaseMenuItem = class PopupBaseMenuItem {
             }
             dotBox.y1 = Math.round(box.y1 + (height - dotWidth) / 2);
             dotBox.y2 = dotBox.y1 + dotWidth;
-            this._dot.allocate(dotBox, flags);
+            this._dot.allocate(dotBox);
         }
 
         let x;
@@ -451,7 +457,7 @@ var PopupBaseMenuItem = class PopupBaseMenuItem {
             childBox.y1 = Math.round(box.y1 + (height - naturalHeight) / 2);
             childBox.y2 = childBox.y1 + naturalHeight;
 
-            child.actor.allocate(childBox, flags);
+            child.actor.allocate(childBox);
 
             if (direction == St.TextDirection.LTR)
                 x += availWidth + this._spacing;
@@ -491,6 +497,7 @@ var PopupMenuItem = class PopupMenuItem extends PopupBaseMenuItem {
             }
             if (!this._ornament.child) {
                 let switchOrn = new CheckBox.CheckBox();
+                switchOrn.reactive = false;
                 switchOrn.set_checked(state);
                 this._ornament.child = switchOrn;
             } else {
@@ -505,6 +512,7 @@ var PopupMenuItem = class PopupMenuItem extends PopupBaseMenuItem {
             }
             if (!this._ornament.child) {
                 let radioOrn = new RadioButton.RadioButton();
+                radioOrn.reactive = false;
                 radioOrn.set_checked(state);
                 this._ornament.child = radioOrn;
             } else {
@@ -1060,6 +1068,16 @@ var PopupIconMenuItem = class PopupIconMenuItem extends PopupBaseMenuItem {
         this._icon.set_icon_name(iconName);
         this._icon.set_icon_type(St.IconType.FULLCOLOR);
     }
+
+    /**
+     * setGIcon:
+     * @gicon (Gio.Icon): the icon to set
+     *
+     * Changes the icon to the #Gio.Icon @gicon.
+     */
+    setGIcon (gicon) {
+        this._icon.set_gicon(gicon);
+    }
 }
 
 // Deprecated. Do not use
@@ -1137,6 +1155,7 @@ var PopupIndicatorMenuItem = class PopupIndicatorMenuItem extends PopupBaseMenuI
             }
             if (!this._ornament.child) {
                 let switchOrn = new CheckBox.CheckBox();
+                switchOrn.reactive = false;
                 switchOrn.set_checked(state);
                 this._ornament.child = switchOrn;
             } else {
@@ -1145,12 +1164,13 @@ var PopupIndicatorMenuItem = class PopupIndicatorMenuItem extends PopupBaseMenuI
             this._icon = null;
             break;
         case OrnamentType.DOT:
-            if ((this._ornament.child) && (!(this._ornament.child._delegate instanceof RadioButton.RadioButton))) {
+            if ((this._ornament.child) && (!(this._ornam. ent.child._delegate instanceof RadioButton.RadioButton))) {
                 this._ornament.child.destroy();
                 this._ornament.child = null;
             }
             if (!this._ornament.child) {
                 let radioOrn = new RadioButton.RadioButton();
+                radioOrn.reactive = false;
                 radioOrn.set_checked(state);
                 this._ornament.child = radioOrn;
             } else {
@@ -1770,25 +1790,14 @@ var PopupMenu = class PopupMenu extends PopupMenuBase {
 
     /**
      * getPanel:
-     * 
-     * @returns panel (Clutter.Actor | null) actor of the panel this menu is on, or null if it is not on a panel 
+     *
+     * @returns panel (Clutter.Actor | null) actor of the panel this menu is on, or null if it is not on a panel
      */
     getPanel() {
-        let parentPanel = null;
-        if (this.sourceActor.get_name() == "panel") {
-            parentPanel = this.sourceActor;
-        } else {
-            let parent = this.sourceActor.get_parent();
-            while (parent) {
-                if (parent.get_name() == "panel") {
-                    parentPanel = parent;
-                    break;
-                }
-                parent = parent.get_parent();
-            }
-        }
+        if (!this.sourceActor)
+            return null;
 
-        return parentPanel;
+        return Main.panelManager.getPanelForActor(this.sourceActor);
     }
 
     /**
@@ -2003,10 +2012,10 @@ var PopupMenu = class PopupMenu extends PopupMenuBase {
 
         for (let panel of panels) {
             if (panel.panelPosition == PanelLoc.top || panel.panelPosition == PanelLoc.bottom) {
-                maxHeight -= panel.actor.height;
+                maxHeight -= panel.get_height();
             }
             else {
-                maxWidth -= panel.actor.width;
+                maxWidth -= panel.get_width();
             }
         }
 
@@ -2037,16 +2046,16 @@ var PopupMenu = class PopupMenu extends PopupMenuBase {
             if (!panel.getIsVisible()) continue;
             switch (panel.panelPosition) {
                 case PanelLoc.top:
-                    y1 += panel.actor.height;
+                    y1 += panel.get_height();
                     break;
                 case PanelLoc.bottom:
-                    y2 -= panel.actor.height;
+                    y2 -= panel.get_height();
                     break;
                 case PanelLoc.left:
-                    x1 += panel.actor.width;
+                    x1 += panel.get_width();
                     break;
                 case PanelLoc.right:
-                    x2 -= panel.actor.width;
+                    x2 -= panel.get_width();
                     break;
             }
         }
@@ -2094,7 +2103,7 @@ var PopupMenu = class PopupMenu extends PopupMenuBase {
                 }
                 break;
         }
-        return [Math.round(xPos), Math.round(yPos)];
+        return [xPos, yPos];
     }
 
     _boxGetPreferredWidth (actor, forHeight, alloc) {
@@ -2109,8 +2118,8 @@ var PopupMenu = class PopupMenu extends PopupMenuBase {
         [alloc.min_size, alloc.natural_size] = this.box.get_preferred_height(forWidth);
     }
 
-    _boxAllocate (actor, box, flags) {
-        this.box.allocate(box, flags);
+    _boxAllocate (actor, box) {
+        this.box.allocate(box);
     }
 
     _allocationChanged (actor, pspec) {
@@ -2499,7 +2508,7 @@ var PopupComboMenu = class PopupComboMenu extends PopupMenuBase {
         let activeItem = this._getMenuItems()[this._activeItemPos];
 
         let [sourceX, sourceY] = this.sourceActor.get_transformed_position();
-        this.actor.set_position(Math.round(sourceX), Math.round(sourceY - activeItem.actor.y));
+        this.actor.set_position(sourceX, sourceY - activeItem.actor.y);
 
         this.actor.raise_top();
 
@@ -2757,7 +2766,13 @@ var PopupMenuManager = class PopupMenuManager {
     }
 
     _grab() {
-        if (!Main.pushModal(this._owner.actor, undefined, undefined, Cinnamon.ActionMode.POPUP)) {
+        // Over a fullscreen window, elevate the whole panel as the base layer
+        // before this menu's grab stacks on top, so the panel stays usable when
+        // the menu closes instead of collapsing.
+        Main.chromeRaiseManager.ensureRaisedForActor(this._owner.actor);
+
+        if (!Main.pushModal(this._owner.actor, undefined, undefined, Cinnamon.ActionMode.POPUP,
+                            () => this._closeMenu())) {
             return;
         }
         this._signals.connect(global.stage, 'captured-event', this._onEventCapture, this);
@@ -2777,6 +2792,7 @@ var PopupMenuManager = class PopupMenuManager {
         this._signals.disconnect(null, global.stage);
 
         this.grabbed = false;
+        this._didPop = false;
         Main.popModal(this._owner.actor);
     }
 
@@ -2944,13 +2960,49 @@ var PopupMenuManager = class PopupMenuManager {
                 return true;
             }
         } else if (eventType == Clutter.EventType.BUTTON_PRESS && !activeMenuContains) {
+            // A press on a panel closes the menu chain but still propagates,
+            // with the grab already popped - the actor under the pointer gets
+            // a complete press/release pair, so one click both dismisses the
+            // menu and acts (launch, activate, open another applet's menu).
+            if (this._srcIsOnPanel(event.get_source())) {
+                this._closeAllMenus();
+                if (!this.grabbed)
+                    return Clutter.EVENT_PROPAGATE;
+
+                global.logError("PopupMenuManager: menu chain did not close synchronously, swallowing panel click");
+                return true;
+            }
+
             this._closeMenu();
             return true;
+        } else if ((eventType == Clutter.EventType.MOTION ||
+                    eventType == Clutter.EventType.ENTER ||
+                    eventType == Clutter.EventType.LEAVE ||
+                    eventType == Clutter.EventType.SCROLL) &&
+                   this._srcIsOnPanel(event.get_source())) {
+            // Crossing, motion and scroll events pass through to panel actors
+            // so they keep their hover feedback and scroll actions while a
+            // menu is open - the press pass-through above already lets a
+            // click land on them.
+            return Clutter.EVENT_PROPAGATE;
         } else if (!this._shouldBlockEvent(event)) {
             return false;
         }
 
         return true;
+    }
+
+    _srcIsOnPanel(src) {
+        return src != null && Main.panelManager.getPanelForActor(src) != null;
+    }
+
+    // Close the whole chain, synchronously.
+    _closeAllMenus() {
+        let prev = null;
+        while (this._activeMenu && this._activeMenu !== prev) {
+            prev = this._activeMenu;
+            prev.close(true);
+        }
     }
 
     _closeMenu() {
