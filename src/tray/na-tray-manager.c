@@ -62,6 +62,8 @@ typedef struct
 
 static guint manager_signals[LAST_SIGNAL];
 
+static void pending_message_free (PendingMessage *message);
+
 #define SYSTEM_TRAY_REQUEST_DOCK    0
 #define SYSTEM_TRAY_BEGIN_MESSAGE   1
 #define SYSTEM_TRAY_CANCEL_MESSAGE  2
@@ -195,7 +197,7 @@ na_tray_manager_finalize (GObject *object)
 
   na_tray_manager_unmanage (manager);
 
-  g_list_free (manager->messages);
+  g_list_free_full (manager->messages, (GDestroyNotify) pending_message_free);
   g_hash_table_destroy (manager->socket_table);
   
   G_OBJECT_CLASS (na_tray_manager_parent_class)->finalize (object);
