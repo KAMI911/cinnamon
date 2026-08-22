@@ -30,6 +30,11 @@ var LONGER_HIDE_TIMEOUT = 0.6;
 const NOTIFICATION_IMAGE_SIZE = 125;
 const NOTIFICATION_IMAGE_OPACITY = 230; // 0 - 255
 
+// Cap on MessageTray._appSettingsCache: without a bound, every distinct app
+// that ever sends a notification over the life of the session gets a
+// permanent Gio.Settings entry that's never evicted.
+const APP_SETTINGS_CACHE_MAX = 50;
+
 // Applets wishing to receive the "notify-applet-update" signal should increment and decrement this value when
 // added and removed from the panel respectfully as when this value is zero, the signal will not be emitted and
 // notifications will be automatically destroyed after being shown.
@@ -875,10 +880,17 @@ MessageTray.prototype = {
         
         if (!this._appSettingsCache[settingsId]) {
             const path = `/org/cinnamon/desktop/notifications/application/${settingsId}/`;
-            
-            this._appSettingsCache[settingsId] = new Gio.Settings({ 
+
+            // Evict the oldest entry once the cache is full instead of
+            // growing it without bound for the life of the session.
+            const cachedIds = Object.keys(this._appSettingsCache);
+            if (cachedIds.length >= APP_SETTINGS_CACHE_MAX) {
+                delete this._appSettingsCache[cachedIds[0]];
+            }
+
+            this._appSettingsCache[settingsId] = new Gio.Settings({
                 schema_id: "org.cinnamon.desktop.notifications.application",
-                path: path 
+                path: path
             });
         }
     
