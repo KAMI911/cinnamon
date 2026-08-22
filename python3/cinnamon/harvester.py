@@ -598,8 +598,13 @@ class Harvester:
             with zipfile.ZipFile(tmp_name) as _zip:
                 with tempfile.TemporaryDirectory() as d:
                     for member in _zip.infolist():
-                        _zip.extract(member, d)
-                        os.chmod(os.path.join(d, member.filename), member.external_attr >> 16)
+                        # chmod the path extract() actually wrote to, not one
+                        # reconstructed from the raw (untrusted) member name:
+                        # a crafted absolute/traversal member name would
+                        # otherwise let os.path.join() escape `d` and chmod
+                        # an arbitrary file outside the extraction dir.
+                        extracted_path = _zip.extract(member, d)
+                        os.chmod(extracted_path, member.external_attr >> 16)
                     self._install_from_folder(os.path.join(d, uuid), d, uuid, from_spices=True)
                     self.write_to_log(uuid, action)
 
