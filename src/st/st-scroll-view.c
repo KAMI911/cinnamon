@@ -434,6 +434,19 @@ st_scroll_view_dispose (GObject *object)
 
   g_signal_handlers_disconnect_by_func (ST_SCROLL_VIEW (object), motion_event_cb, ST_SCROLL_VIEW (object));
 
+  /* do_auto_scroll() is scheduled with a raw actor pointer as its data, no
+   * ref taken and no GDestroyNotify - if a pending auto-scroll timeout
+   * outlives this object (e.g. destroyed mid-drag while the pointer is
+   * still in the auto-scroll region), it fires after finalization and
+   * dereferences freed memory. st_scroll_view_set_auto_scrolling(FALSE)
+   * already removes it; do the same here so disposal is enough on its own.
+   */
+  if (priv->auto_scroll_timeout_id > 0)
+    {
+      g_source_remove (priv->auto_scroll_timeout_id);
+      priv->auto_scroll_timeout_id = 0;
+    }
+
   G_OBJECT_CLASS (st_scroll_view_parent_class)->dispose (object);
 }
 
