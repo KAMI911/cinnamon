@@ -1528,10 +1528,14 @@ class Crosshairs extends Clutter.Actor {
      * child actor if it was just a clone of the crosshairs actor.
      */
     removeFromParent(childActor) {
-        if (childActor == this)
+        if (childActor == this) {
             childActor.get_parent().remove_actor(childActor);
-        else
+        } else {
+            let index = this._clones.indexOf(childActor);
+            if (index != -1)
+                this._clones.splice(index, 1);
             childActor.destroy();
+        }
     }
 
     /**
