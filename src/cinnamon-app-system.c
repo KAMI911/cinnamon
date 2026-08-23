@@ -222,8 +222,20 @@ get_prefix_for_entry (GMenuTreeEntry *entry)
           char *t1;
           size_t name_len = strlen (name);
           size_t id_len = strlen (id);
-          char *t_id = g_strdup (id);
+          char *t_id;
 
+          if (name_len > id_len)
+            {
+              /* `name` (built by prepending each parent directory's
+               * basename) should always be a suffix of `id` by this point;
+               * if it isn't, id_len - name_len below would underflow (both
+               * are size_t) and write out of bounds. Bail out instead. */
+              g_object_unref (parent);
+              g_free (pname);
+              break;
+            }
+
+          t_id = g_strdup (id);
           t_id[id_len - name_len] = '\0';
           t1 = g_strdup(t_id);
           g_free (prefix);
