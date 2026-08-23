@@ -170,6 +170,12 @@ function addContextMenu(entry, params, parentMenu) {
     entry.connect('button-press-event', _onClicked);
     entry.clutter_text.connect('button-press-event', _onClicked);
     entry.connect('popup-menu', _onPopup);
+
+    entry.connect('destroy', () => {
+        entry._menu.destroy();
+        entry._menu = null;
+        entry._menuManager = null;
+    });
 }
 
 var CapsLockWarning = GObject.registerClass(
