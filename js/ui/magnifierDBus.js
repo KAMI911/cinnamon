@@ -101,6 +101,14 @@ const ZoomRegionIface =
 // '/org/gnome/Magnifier/ZoomRegion/zoomer1', etc.
 let _zoomRegionInstanceCount = 0;
 
+// createZoomRegion/setRoi/moveResize take D-Bus 'ai' arrays with no length
+// enforced by the protocol; a caller can send any length. Reject anything
+// that isn't a well-formed [left, top, right, bottom] rectangle before it
+// reaches the width/height math and Clutter/Cogl geometry calls below.
+function _isValidRect(rect) {
+    return Array.isArray(rect) && rect.length === 4 && rect.every(Number.isFinite);
+}
+
 var CinnamonMagnifier = class CinnamonMagnifier {
     constructor() {
         this._zoomers = {};
@@ -162,6 +170,9 @@ var CinnamonMagnifier = class CinnamonMagnifier {
      * @return          The newly created ZoomRegion.
      */
     createZoomRegion(xMagFactor, yMagFactor, roi, viewPort) {
+        if (!_isValidRect(roi) || !_isValidRect(viewPort))
+            throw new Error("createZoomRegion: roi and viewPort must be 4-element [left, top, right, bottom] arrays");
+
         let ROI = { x: roi[0], y: roi[1], width: roi[2] - roi[0], height: roi[3] - roi[1] };
         let viewBox = { x: viewPort[0], y: viewPort[1], width: viewPort[2] - viewPort[0], height: viewPort[3] - viewPort[1] };
         let realZoomRegion = Main.magnifier.createZoomRegion(xMagFactor, yMagFactor, ROI, viewBox);
@@ -374,6 +385,9 @@ var CinnamonMagnifierZoomRegion = class CinnamonMagnifierZoomRegion {
      *          coordinate space.
      */
     setRoi(roi) {
+        if (!_isValidRect(roi))
+            throw new Error("setRoi: roi must be a 4-element [left, top, right, bottom] array");
+
         let roiObject = { x: roi[0], y: roi[1], width: roi[2] - roi[0], height: roi[3] - roi[1] };
         this._zoomRegion.setROI(roiObject);
     }
@@ -413,6 +427,9 @@ var CinnamonMagnifierZoomRegion = class CinnamonMagnifierZoomRegion {
      *              size on screen to place the zoom region.
      */
     moveResize(viewPort) {
+        if (!_isValidRect(viewPort))
+            throw new Error("moveResize: viewPort must be a 4-element [left, top, right, bottom] array");
+
         let viewRect = { x: viewPort[0], y: viewPort[1], width: viewPort[2] - viewPort[0], height: viewPort[3] - viewPort[1] };
         this._zoomRegion.setViewPort(viewRect);
     }
