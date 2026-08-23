@@ -15,6 +15,11 @@ const common_css =
   text-align: center;   \
 ";
 
+// ShowMonitorLabels is an unauthenticated D-Bus method (js/ui/cinnamonDBus.js),
+// so displayName/connector (interpolated into Pango markup below) and color
+// (interpolated into a raw St CSS style string) are all caller-controlled.
+const VALID_CSS_COLOR = /^(#[0-9a-fA-F]{3,8}|[a-zA-Z]+|rgba?\([0-9., ]+\))$/;
+
 var MonitorLabel = GObject.registerClass(
 class MonitorLabel extends St.BoxLayout {
     _init(monitor, connector, info) {
@@ -23,7 +28,7 @@ class MonitorLabel extends St.BoxLayout {
         this._index = info[0];
         this._cloned = info[1];
         this._displayName = info[2];
-        this._color = info[3];
+        this._color = VALID_CSS_COLOR.test(info[3]) ? info[3] : "white";
 
         super._init({
             style: `${common_css} background-color: ${this._color};`,
@@ -36,7 +41,9 @@ class MonitorLabel extends St.BoxLayout {
             let str = _("Mirrored Displays");
             labelText = `<b>${str}</b>`;
         } else {
-            labelText = `<b>${this._index}  ${this._displayName}</b>\n${this._connector}`
+            let displayName = GLib.markup_escape_text(`${this._displayName}`, -1);
+            let connectorText = GLib.markup_escape_text(`${this._connector}`, -1);
+            labelText = `<b>${this._index}  ${displayName}</b>\n${connectorText}`
         }
 
         this._label = new St.Label();
