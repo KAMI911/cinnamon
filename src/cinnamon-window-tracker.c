@@ -670,8 +670,12 @@ on_window_shown (MetaWindow *window,
       _cinnamon_app_add_window (new_app, window);
       g_signal_emit (self, signals[WINDOW_APP_CHANGED], 0, window);
     }
-  else if (new_app != NULL && new_app != old_app)
+  else if (new_app != NULL)
     {
+      /* Either new_app == old_app (already tracked under this app, nothing
+       * to change) or new_app is window-backed and didn't qualify for the
+       * replacement above; either way get_app_for_window()'s (transfer
+       * full) reference isn't being stored anywhere, so drop it. */
       g_object_unref (new_app);
     }
 }
@@ -965,7 +969,7 @@ _cinnamon_window_tracker_add_child_process_app (CinnamonWindowTracker *tracker,
   gpointer pid_ptr = GINT_TO_POINTER((int)pid);
 
   if (g_hash_table_lookup (tracker->launched_pid_to_app,
-                           &pid_ptr))
+                           pid_ptr))
     return;
 
   g_hash_table_insert (tracker->launched_pid_to_app,
