@@ -704,25 +704,25 @@ var FocusTracker = class {
         this._currentWindow = null;
         this._rect = null;
 
-        global.display.connect('notify::focus-window', () => {
+        this._displayFocusId = global.display.connect('notify::focus-window', () => {
             this._setCurrentWindow(global.display.focus_window);
             this.emit('window-changed', this._currentWindow);
         });
 
-        global.display.connect('grab-op-begin', (display, window, op) => {
+        this._displayGrabOpId = global.display.connect('grab-op-begin', (display, window, op) => {
             if (window == this._currentWindow &&
                 (op == Meta.GrabOp.MOVING || op == Meta.GrabOp.KEYBOARD_MOVING))
                 this.emit('reset');
         });
 
         /* Valid for wayland clients */
-        Main.inputMethod.connect('cursor-location-changed', (o, rect) => {
+        this._inputMethodId = Main.inputMethod.connect('cursor-location-changed', (o, rect) => {
             let newRect = { x: rect.get_x(), y: rect.get_y(), width: rect.get_width(), height: rect.get_height() };
             this._setCurrentRect(newRect);
         });
 
         this._ibusManager = IBusManager.getIBusManager();
-        this._ibusManager.connect('set-cursor-location', (manager, rect) => {
+        this._ibusCursorId = this._ibusManager.connect('set-cursor-location', (manager, rect) => {
             /* Reported by clients using the client-side ibus modules (X11
              * apps, and XWayland apps in a Wayland session); when the
              * compositor input method has a focus, its rect wins. */
@@ -731,12 +731,21 @@ var FocusTracker = class {
 
             this._setCurrentRect(rect);
         });
-        this._ibusManager.connect('focus-in', () => {
+        this._ibusFocusInId = this._ibusManager.connect('focus-in', () => {
             this.emit('focus-changed', true);
         });
-        this._ibusManager.connect('focus-out', () => {
+        this._ibusFocusOutId = this._ibusManager.connect('focus-out', () => {
             this.emit('focus-changed', false);
         });
+    }
+
+    destroy() {
+        global.display.disconnect(this._displayFocusId);
+        global.display.disconnect(this._displayGrabOpId);
+        Main.inputMethod.disconnect(this._inputMethodId);
+        this._ibusManager.disconnect(this._ibusCursorId);
+        this._ibusManager.disconnect(this._ibusFocusInId);
+        this._ibusManager.disconnect(this._ibusFocusOutId);
     }
 
     get currentWindow() {
@@ -1077,6 +1086,11 @@ class Keyboard extends St.BoxLayout {
 
         this._clearShowIdle();
         this._releaseAllModifiers();
+
+        if (this._focusTracker) {
+            this._focusTracker.destroy();
+            this._focusTracker = null;
+        }
 
         this._keyboardController.destroy();
 
