@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 
 import os
+import re
 import sys
 import subprocess
 import json
@@ -94,6 +95,18 @@ SPICE_MAP = {
 TIMEOUT_DOWNLOAD_JSON = 15
 TIMEOUT_DOWNLOAD_THUMB = 60
 TIMEOUT_DOWNLOAD_ZIP = 120
+
+# Spice uuids are used to build filesystem paths that are later written to or
+# recursively removed. They may originate from the remote spices server (json
+# index keys, metadata.json) which we don't fully trust, so anything that
+# isn't a bare, single-component name is rejected before it ever reaches
+# os.path.join()/shutil.rmtree() to prevent path traversal.
+UUID_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.@-]*$')
+
+
+def validate_uuid(uuid):
+    if not uuid or not UUID_RE.match(uuid) or '..' in uuid or os.sep in uuid:
+        raise ValueError(f"Refusing to use unsafe spice uuid: {uuid!r}")
 
 
 def remove_empty_folders(path):
@@ -579,6 +592,7 @@ class Harvester:
             return False
 
     def _install_by_uuid(self, uuid, progress_callback=None):
+        validate_uuid(uuid)
         action = "upgrade" if uuid in self.meta_map else "install"
 
         try:
@@ -655,6 +669,7 @@ class Harvester:
             r.close()
 
     def _uninstall_by_uuid(self, uuid):
+        validate_uuid(uuid)
         try:
             if not self.themes:
                 if os.path.exists(locale_inst):
@@ -686,6 +701,7 @@ class Harvester:
             self._load_metadata()
 
     def _install_from_folder(self, folder, base_folder, uuid, from_spices=False):
+        validate_uuid(uuid)
         contents = os.listdir(folder)
 
         if not self.themes:
@@ -734,6 +750,7 @@ class Harvester:
     def _remove_spice_from_all_directories(self, uuid):
         # Iterates user-writable install_folders only — system spices are
         # package-managed and not ours to delete from /usr/share/.
+        validate_uuid(uuid)
         for directory in self.install_folders:
             dest = os.path.join(directory, uuid)
             if os.path.isdir(dest):
