@@ -204,7 +204,8 @@ class Launcher:
                 time.sleep(delay)
                 if not process.is_running():
                     break
-                memory = ((process.memory_full_info().rss - process.memory_full_info().shared) / 1024 ** 2)
+                mem_info = process.memory_full_info()
+                memory = (mem_info.rss - mem_info.shared) / 1024 ** 2
                 if memory > limit:
                     print ("Memory threshold reached: %d" % memory)
                     self.log_kill(memory, limit, delay)
